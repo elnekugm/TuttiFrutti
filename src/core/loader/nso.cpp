@@ -379,6 +379,58 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         }
     }
 
+    // Donkey Kong Bananza's frame-rate controller (main+0x204a18) picks how many vblanks a frame
+    // lasts from the CPU calc time in [fw+0x128], which stays short under emulation, so the game
+    // runs in slow motion below 60 FPS. Time the whole frame ([fw+0xe8]) with a half-frame margin
+    // and clamp the interval instead, as the external "DK Bananza Dynamic FPS" mod does: 1 to 3
+    // vblanks keeps normal speed down to about 20 FPS, 1 to 2 gives 30 FPS. The seven instruction
+    // sites are the update v458752 ones and are verified before writing, so another build is left
+    // alone. Every word here was checked against that mod's patch and against the game's code.
+    const bool dkb_30fps = Settings::values.dkb_30fps.GetValue();
+    const bool dkb_dynamic = Settings::values.dkb_dynamic_fps.GetValue() && !dkb_30fps;
+    if ((dkb_dynamic || dkb_30fps) && name == "main" &&
+        process.GetProgramId() == Settings::DonkeyKongBananzaProgramId) {
+        struct FpsSite {
+            size_t offset;
+            u32 original;
+            u32 patched;
+        };
+        // cmp w10, #cap and mov w9, #cap: the interval is the smaller of the game's own value and
+        // the cap (w9 holds it after the csel, whose condition comes from the cmp).
+        const u32 cap = dkb_30fps ? 2U : 3U;
+        const std::array<FpsSite, 7> sites{{
+            {0x204A40, 0xF9409428, 0xF9407428},                  // ldr x8,[x1,#0x128] -> #[0xe8]
+            {0x204AA4, 0xBD400A81, 0x1E3C1001},                  // ldr s1,[x20,#8]    -> fmov #-0.5
+            {0x204AA8, 0x29402E88, 0x52800028},                  // ldp w8,w11,[x20]   -> mov w8,#1
+            {0x204AB8, 0x6B0B015F, 0x7100015F | (cap << 10)},    // cmp w10,w11        -> #cap
+            {0x204ABC, 0x1A89A569, 0x52800009 | (cap << 5)},     // csinc w9,...       -> mov w9,#cap
+            {0x204AC0, 0x6B08015F, 0x1A89B14A},                  // cmp w10,w8         -> csel w10,w10,w9,lt
+            {0x204AC4, 0x1A89B10A, 0xD503201F},                  // csel w10,w8,w9,lt  -> nop
+        }};
+        const auto& text = nso_header.segments[0];
+        u8* const code = codeset.memory.data() + module_start + text.location;
+        bool matches = true;
+        for (const FpsSite& site : sites) {
+            u32 value;
+            std::memcpy(&value, code + site.offset, sizeof(value));
+            if (value != site.original) {
+                LOG_WARNING(Loader,
+                            "Donkey Kong Bananza FPS patch skipped: main+{:#x} is {:#010x}, not "
+                            "{:#010x}",
+                            site.offset, value, site.original);
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            for (const FpsSite& site : sites) {
+                std::memcpy(code + site.offset, &site.patched, sizeof(site.patched));
+            }
+            LOG_INFO(Loader, "Donkey Kong Bananza: {} FPS mode enabled (main+0x204a18)",
+                     dkb_30fps ? "30" : "dynamic");
+        }
+    }
+
     // Hyrule Warriors' frame interval (core/hle/service/nx2_frame_interval.h). Its only copy into
     // the global is
     //   adrp x9, got; ...; ldr x9, [x9, #got]; ...; adrp x8, global; add x8, x8, #global;
