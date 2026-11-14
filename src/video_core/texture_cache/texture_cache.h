@@ -577,6 +577,9 @@ void TextureCache<P>::TickFrame() {
             const u64 fit_margin = (std::max)(pressure_margin, spill_margin);
             if (native_thresholds_applied && budget_check_frames++ % 30 == 0) {
                 const u64 budget = runtime.GetDeviceMemoryBudget();
+                if constexpr (requires { runtime.NoteBudgetPressure(u64{}, u64{}); }) {
+                    runtime.NoteBudgetPressure(runtime.GetDeviceMemoryUsage(), budget);
+                }
                 retention_limit = 0;
                 if (budget > 2_GiB) {
                     const u64 margin = (std::min)(budget / 8, 1_GiB);
@@ -608,6 +611,45 @@ void TextureCache<P>::TickFrame() {
                     retention_limit = (std::min)(retention_budget - room_margin, host_critical);
                     expected_memory = critical_memory - (std::min)(margin, critical_memory / 2);
                     ApplyThresholdOverrides(false);
+                    // Small cards (GTX 1650, 3 GiB budget): buffers, pipelines, block slack and
+                    // the driver's own data took ~1.8 GiB, so device usage sat above critical
+                    // with only 1.1-1.4 GiB of images. The collector can free nothing but images:
+                    // it stayed aggressive for good, deleting 4000-7600 images per 600 frames,
+                    // ~2100 of them downloaded with a full GPU wait each and ~900 ASTC ones
+                    // transcoded again. The thresholds leave the images this much room over
+                    // what is not images. EDEN_NX2_TC_IMAGE_FLOOR_MIB sets it (0 = off).
+                    static const std::optional<u64> forced_floor = []() -> std::optional<u64> {
+                        const char* value = std::getenv("EDEN_NX2_TC_IMAGE_FLOOR_MIB");
+                        return value != nullptr
+                                   ? std::optional<u64>{std::strtoull(value, nullptr, 10) << 20}
+                                   : std::nullopt;
+                    }();
+                    // Small cards only: larger ones keep their thresholds as they were.
+                    const u64 image_floor = forced_floor.value_or(
+                        budget < 5_GiB ? (std::min)(budget / 2, u64{1536_MiB}) : u64{0});
+                    if (image_floor != 0) {
+                        u64 image_bytes{};
+                        // The host's bytes: ASTC re-compressed to BC takes 2-4 times the guest's.
+                        for (const auto [image_id, image] : slot_images) {
+                            image_bytes += ImageMemoryBytes(*image);
+                        }
+                        const u64 other = total_used_memory - (std::min)(total_used_memory, image_bytes);
+                        const u64 floor_expected = other + image_floor;
+                        if (floor_expected > expected_memory) {
+                            static bool image_floor_logged{};
+                            if (!image_floor_logged) {
+                                image_floor_logged = true;
+                                LOG_INFO(HW_GPU,
+                                         "Texture cache image floor: {} MiB in use is not images, "
+                                         "images get {} MiB (expected {} -> {} MiB)",
+                                         other >> 20, image_floor >> 20, expected_memory >> 20,
+                                         floor_expected >> 20);
+                            }
+                            expected_memory = floor_expected;
+                            critical_memory =
+                                (std::max)(critical_memory, floor_expected + image_floor / 4);
+                        }
+                    }
                     u64 other_memory = 0;
                     if constexpr (requires { runtime.GetDeviceHeapMemoryBudget(); }) {
                         // An integrated GPU's budget is the share of system memory it is capped
@@ -3113,6 +3155,8 @@ u64 TextureCache<P>::ImageMemoryBytes(const Image& image) const {
         True(image.flags & ImageFlagBits::Converted)) {
         tentative_size = TranscodedAstcSize(tentative_size, image.info.format);
     }
+    // Each top level of an ASTC texture left out (TrimmedHostInfo) is 4 times the guest bytes.
+    tentative_size >>= 2 * image.host_level_offset;
     return Common::AlignUp(tentative_size, 1024);
 }
 

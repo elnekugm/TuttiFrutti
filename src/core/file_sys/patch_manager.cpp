@@ -6,12 +6,15 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <span>
+#include <utility>
 
 #include "common/assert.h"
 #include "common/hex_util.h"
+#include "common/host_video_memory.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #ifndef _WIN32
@@ -72,9 +75,29 @@ struct BuiltinPatch {
     // Applies only with NVIDIA DLSS on at this quality in docked mode, and is not listed in
     // Add-Ons.
     std::optional<Settings::NvidiaDlssQuality> dlss_quality{};
+    // Applies (and is listed) only while this returns true: a card that cannot hold what the
+    // patch costs keeps the game's own behaviour instead (see MaxResolutionFits).
+    bool (*setting_enabled)() = nullptr;
 };
 
 constexpr std::string_view MAX_RESOLUTION_NAME = "Max Resolution (built-in)";
+
+// Max Resolution turns the game's dynamic resolution off, so the 3D stays at 1440p docked. A
+// small card (GTX 1650, 4 GB) then spends 36 ms a frame at the 90th percentile: there the game
+// keeps its own controller. EDEN_NX2_NO_MAX_RES=0 applies the patch anyway.
+bool MaxResolutionFits() {
+    if (const char* const value = std::getenv("EDEN_NX2_NO_MAX_RES"); value && *value == '0') {
+        return true;
+    }
+    const bool small = Common::HostHasSmallVideoMemory();
+    static bool logged{};
+    if (small && !std::exchange(logged, true)) {
+        LOG_INFO(Loader, "Max Resolution (built-in) left out: {} MiB of video memory, the game "
+                         "keeps its dynamic resolution",
+                 Common::HostDedicatedVideoMemory() >> 20);
+    }
+    return !small;
+}
 
 constexpr std::array<u8, 4> MAX_RESOLUTION_ORIGINAL{0xE8, 0x41, 0x00, 0x36};
 constexpr std::array<u8, 4> MAX_RESOLUTION_BRANCH{0x0F, 0x02, 0x00, 0x14};
@@ -424,6 +447,7 @@ constexpr std::array BUILTIN_PATCHES{
         .module = "main",
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = MAX_RESOLUTION_RECORDS,
+        .setting_enabled = &MaxResolutionFits,
     },
     // With Max Resolution the guard house outgrows the initial pool and dereferences a null
     // allocation.
@@ -981,6 +1005,10 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
                      patch.name);
             continue;
         }
+        if (patch.setting_enabled && !patch.setting_enabled()) {
+            LOG_INFO(Loader, "    - Skipping \"{}\": left out on this GPU", patch.name);
+            continue;
+        }
         if (patch.dlss_quality) {
 #ifdef EGLANTINE_STREAMLINE
             const bool wanted = Settings::OcarinaDlssRenderScale() == patch.dlss_quality &&
@@ -1117,7 +1145,8 @@ bool PatchManager::HasNSOPatch(const BuildID& build_id_, std::string_view name) 
     LOG_INFO(Loader, "Querying NSO patch existence for build_id={}, name={}", build_id, name);
 
     if (std::ranges::any_of(BUILTIN_PATCHES, [&](const BuiltinPatch& patch) {
-            return patch.title_id == title_id && patch.module == name;
+            return patch.title_id == title_id && patch.module == name &&
+                   (!patch.setting_enabled || patch.setting_enabled());
         })) {
         return true;
     }
@@ -1659,7 +1688,8 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
     }
 
     for (const auto& patch : BUILTIN_PATCHES) {
-        if (patch.title_id != title_id || patch.dlss_quality) {
+        if (patch.title_id != title_id || patch.dlss_quality ||
+            (patch.setting_enabled && !patch.setting_enabled())) {
             continue;
         }
         const auto is_disabled = [&](std::string_view name) {
