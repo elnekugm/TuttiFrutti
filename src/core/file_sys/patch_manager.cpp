@@ -438,6 +438,62 @@ constexpr std::array FPS_UNLOCK_STATES{
     BuiltinPatchState{0x4E9EE00, 0x110},
 };
 
+/// Donkey Kong Bananza's own frame-rate controller (main+0x204a18) picks how many vblanks a frame
+/// lasts from the CPU calc time in [fw+0x128], which stays short under emulation, so the game runs
+/// in slow motion below 60 FPS. Time the whole frame ([fw+0xe8]) with a half-frame margin and
+/// clamp the interval instead, as the "DK Bananza Dynamic FPS" mod does. Every instruction below
+/// was checked against update v458752 (build id E25C90C1...) and against that mod's own patch.
+constexpr std::array<u8, 4> DKB_FPS_ORIG_204A40{0x28, 0x94, 0x40, 0xF9}; // ldr x8, [x1, #0x128]
+constexpr std::array<u8, 4> DKB_FPS_204A40{0x28, 0x74, 0x40, 0xF9};      // ldr x8, [x1, #0xe8]
+constexpr std::array<u8, 4> DKB_FPS_ORIG_204AA4{0x81, 0x0A, 0x40, 0xBD}; // ldr s1, [x20, #8]
+constexpr std::array<u8, 4> DKB_FPS_204AA4{0x01, 0x10, 0x3C, 0x1E};      // fmov s1, #-0.5
+constexpr std::array<u8, 4> DKB_FPS_ORIG_204AA8{0x88, 0x2E, 0x40, 0x29}; // ldp w8, w11, [x20]
+constexpr std::array<u8, 4> DKB_FPS_204AA8{0x28, 0x00, 0x80, 0x52};      // mov w8, #1
+constexpr std::array<u8, 4> DKB_FPS_ORIG_204AB8{0x5F, 0x01, 0x0B, 0x6B}; // cmp w10, w11
+constexpr std::array<u8, 4> DKB_FPS_204AB8_3{0x5F, 0x0D, 0x00, 0x71};    // cmp w10, #3
+constexpr std::array<u8, 4> DKB_FPS_204AB8_2{0x5F, 0x09, 0x00, 0x71};    // cmp w10, #2
+constexpr std::array<u8, 4> DKB_FPS_ORIG_204ABC{0x69, 0xA5, 0x89, 0x1A}; // csinc w9, w11, w9, ge
+constexpr std::array<u8, 4> DKB_FPS_204ABC_3{0x69, 0x00, 0x80, 0x52};    // mov w9, #3
+constexpr std::array<u8, 4> DKB_FPS_204ABC_2{0x49, 0x00, 0x80, 0x52};    // mov w9, #2
+constexpr std::array<u8, 4> DKB_FPS_ORIG_204AC0{0x5F, 0x01, 0x08, 0x6B}; // cmp w10, w8
+constexpr std::array<u8, 4> DKB_FPS_204AC0{0x4A, 0xB1, 0x89, 0x1A};      // csel w10, w10, w9, lt
+constexpr std::array<u8, 4> DKB_FPS_ORIG_204AC4{0x0A, 0xB1, 0x89, 0x1A}; // csel w10, w8, w9, lt
+constexpr std::array<u8, 4> DKB_FPS_204AC4{0x1F, 0x20, 0x03, 0xD5};      // nop
+
+// 1 to 3 vblanks per frame: normal speed down to about 20 FPS.
+constexpr std::array DKB_DYNAMIC_FPS_RECORDS{
+    BuiltinPatchRecord{0x204A40, DKB_FPS_204A40, DKB_FPS_ORIG_204A40},
+    BuiltinPatchRecord{0x204AA4, DKB_FPS_204AA4, DKB_FPS_ORIG_204AA4},
+    BuiltinPatchRecord{0x204AA8, DKB_FPS_204AA8, DKB_FPS_ORIG_204AA8},
+    BuiltinPatchRecord{0x204AB8, DKB_FPS_204AB8_3, DKB_FPS_ORIG_204AB8},
+    BuiltinPatchRecord{0x204ABC, DKB_FPS_204ABC_3, DKB_FPS_ORIG_204ABC},
+    BuiltinPatchRecord{0x204AC0, DKB_FPS_204AC0, DKB_FPS_ORIG_204AC0},
+    BuiltinPatchRecord{0x204AC4, DKB_FPS_204AC4, DKB_FPS_ORIG_204AC4},
+};
+// 1 to 2 vblanks per frame: 30 FPS, and 60 when the game can hold it.
+constexpr std::array DKB_30FPS_RECORDS{
+    BuiltinPatchRecord{0x204A40, DKB_FPS_204A40, DKB_FPS_ORIG_204A40},
+    BuiltinPatchRecord{0x204AA4, DKB_FPS_204AA4, DKB_FPS_ORIG_204AA4},
+    BuiltinPatchRecord{0x204AA8, DKB_FPS_204AA8, DKB_FPS_ORIG_204AA8},
+    BuiltinPatchRecord{0x204AB8, DKB_FPS_204AB8_2, DKB_FPS_ORIG_204AB8},
+    BuiltinPatchRecord{0x204ABC, DKB_FPS_204ABC_2, DKB_FPS_ORIG_204ABC},
+    BuiltinPatchRecord{0x204AC0, DKB_FPS_204AC0, DKB_FPS_ORIG_204AC0},
+    BuiltinPatchRecord{0x204AC4, DKB_FPS_204AC4, DKB_FPS_ORIG_204AC4},
+};
+
+// Donkey Kong Bananza's program id, as the load folder uses it.
+constexpr u64 DKB_PROGRAM_ID = 0x040074A01BF12000ULL;
+// The build id of the update the offsets above were taken from (v458752).
+constexpr std::string_view DKB_BUILD_ID = "E25C90C1C136638885659FD55BF8A03B3403489D";
+
+bool DkbDynamicFpsEnabled() {
+    return Settings::values.dkb_dynamic_fps.GetValue() && !Settings::values.dkb_30fps.GetValue();
+}
+
+bool Dkb30FpsEnabled() {
+    return Settings::values.dkb_30fps.GetValue();
+}
+
 constexpr std::array BUILTIN_PATCHES{
     // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
     // instead of following the GPU-time controller down to its 480p floor.
@@ -502,6 +558,25 @@ constexpr std::array BUILTIN_PATCHES{
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = RENDER_ULTRA_RECORDS,
         .dlss_quality = Settings::NvidiaDlssQuality::UltraPerformance,
+    },
+    // Donkey Kong Bananza: its frame-rate controller runs the game in slow motion under 60 FPS.
+    // Timing the whole frame with a clamped interval keeps normal speed instead (the same change
+    // as the external "DK Bananza Dynamic FPS" mod: use one or the other, not both).
+    BuiltinPatch{
+        .name = "Dynamic FPS (built-in, experimental)",
+        .title_id = DKB_PROGRAM_ID,
+        .module = "main",
+        .build_id = DKB_BUILD_ID,
+        .records = DKB_DYNAMIC_FPS_RECORDS,
+        .setting_enabled = &DkbDynamicFpsEnabled,
+    },
+    BuiltinPatch{
+        .name = "30 FPS mode (built-in)",
+        .title_id = DKB_PROGRAM_ID,
+        .module = "main",
+        .build_id = DKB_BUILD_ID,
+        .records = DKB_30FPS_RECORDS,
+        .setting_enabled = &Dkb30FpsEnabled,
     },
 };
 
@@ -1006,7 +1081,7 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
             continue;
         }
         if (patch.setting_enabled && !patch.setting_enabled()) {
-            LOG_INFO(Loader, "    - Skipping \"{}\": left out on this GPU", patch.name);
+            LOG_INFO(Loader, "    - Skipping \"{}\": not enabled here (GPU or setting)", patch.name);
             continue;
         }
         if (patch.dlss_quality) {

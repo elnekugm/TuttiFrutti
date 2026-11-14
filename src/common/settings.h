@@ -751,6 +751,15 @@ struct Values {
     SwitchableSetting<bool> hyrule_30fps{linkage, false, "hyrule_30fps", Category::RendererAdvanced,
                                          Specialization::Default, true, true};
 
+    // Donkey Kong Bananza: its frame-rate controller runs the game in slow motion below 60 FPS.
+    // Both patch it to time the whole frame (the "DK Bananza Dynamic FPS" mod's behaviour);
+    // dkb_30fps also holds the frame interval at 2 vblanks (30 FPS) instead of allowing 3.
+    SwitchableSetting<bool> dkb_dynamic_fps{linkage, false, "dkb_dynamic_fps",
+                                           Category::RendererAdvanced, Specialization::Default,
+                                           true, true};
+    SwitchableSetting<bool> dkb_30fps{linkage, false, "dkb_30fps", Category::RendererAdvanced,
+                                      Specialization::Default, true, true};
+
     SwitchableSetting<bool> use_reactive_flushing{linkage,
 #ifdef __ANDROID__
                                                   false,

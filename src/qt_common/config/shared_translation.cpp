@@ -463,6 +463,14 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, hyrule_30fps, tr("Hyrule Warriors: Age of Imprisonment: 30 FPS mode"),
            tr("Always runs at 30 FPS with the game's split-screen time step, at normal game speed. "
               "Takes precedence over dynamic FPS."));
+    INSERT(Settings, dkb_dynamic_fps, tr("Donkey Kong Bananza: dynamic FPS (experimental)"),
+           tr("Times the whole frame so the game keeps normal speed instead of running in slow "
+              "motion under 60 FPS. The frame interval is 1, 2 or 3 vblanks, so it presents 60, 30 "
+              "or 20 FPS with correct speed. Takes effect after restarting the game."));
+    INSERT(Settings, dkb_30fps, tr("Donkey Kong Bananza: 30 FPS mode"),
+           tr("As dynamic FPS, but holds the frame interval at 2 vblanks: 30 FPS, at normal speed "
+              "only while the game can produce a frame every 33 ms. Takes precedence over dynamic "
+              "FPS. Takes effect after restarting the game."));
     INSERT(Settings, barrier_feedback_loops, tr("Barrier feedback loops"),
            tr("Improves rendering of transparency effects in specific games."));
     INSERT(Settings, enable_buffer_history, tr("Enable buffer history"),
