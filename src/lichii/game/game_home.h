@@ -6,6 +6,7 @@
 #include <functional>
 #include <vector>
 
+#include <QColor>
 #include <QListView>
 #include <QPointer>
 #include <QString>
@@ -23,6 +24,8 @@ class QWidget;
 /// One quick-setting chip under the cards (renderer, docked mode, volume, ...).
 struct HomeChip {
     QString caption;
+    /// The chip's category color, the same as the status bar's.
+    QColor color{0xc4, 0xc5, 0xca};
     /// The value shown on the chip.
     std::function<QString()> text;
     /// False greys the chip out, for a setting that is off (for example post effects).
@@ -44,6 +47,12 @@ class GameHome : public QListView {
     Q_OBJECT
 
 public:
+    /// Which buttons the hints show: the controller player 1 uses, or the keyboard.
+    enum class ButtonStyle { Keyboard, Switch, Xbox, PlayStation };
+
+    /// What a hint's button does; the glyph comes from the style.
+    enum class HintRole { Confirm, Back, Options, Adjust };
+
     explicit GameHome(QWidget* parent = nullptr);
     ~GameHome() override;
 
@@ -54,7 +63,10 @@ public:
     /// The main window's menu bar: its menus become the pills at the top, and it is hidden while
     /// the home screen shows.
     void SetMenuBar(QMenuBar* menu_bar);
+    /// Bars hidden while the home screen shows (the status bar: the chips replace it).
+    void HideWhileShown(QWidget* bar);
     void SetChips(std::vector<HomeChip> chips);
+    void SetButtonStyle(ButtonStyle style);
     void RefreshChips();
 
     /// Moves the selection by delta games (the mouse wheel uses it).
@@ -75,6 +87,7 @@ protected:
     void hideEvent(QHideEvent* event) override;
     void currentChanged(const QModelIndex& current, const QModelIndex& previous) override;
     void mousePressEvent(QMouseEvent* event) override;
+    bool eventFilter(QObject* object, QEvent* event) override;
 
 private:
     enum class Row { Menus, Cards, Chips };
@@ -91,6 +104,14 @@ private:
     void OpenMenu(int index);
     void ActivateChip(int index);
     void RebuildPills();
+    void StyleChip(size_t index);
+
+    struct HiddenBar {
+        QPointer<QWidget> bar;
+        bool was_visible = false;
+    };
+    std::vector<HiddenBar> hidden_bars;
+    ButtonStyle button_style = ButtonStyle::Keyboard;
 
     HomeCard* card_delegate = nullptr;
 
@@ -102,7 +123,6 @@ private:
     QWidget* hint_bar = nullptr;
 
     QPointer<QMenuBar> menu_bar;
-    bool menu_bar_was_visible = true;
     bool shortcuts_moved = false;
     std::vector<QPushButton*> pills;
     std::vector<QPointer<QMenu>> pill_menus;

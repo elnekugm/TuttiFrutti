@@ -98,29 +98,159 @@ QPushButton#HomePill[homeFocus="true"] {
 QLabel#HomeStatus { color: #7f9fff; font-size: 14px; font-weight: 600; background: transparent; }
 QLabel#HomeTitle { color: #f2f3f5; font-size: 23px; background: transparent; }
 QLabel#HomeChipCaption { color: #8b8d94; font-size: 12px; background: transparent; }
-QPushButton#HomeChip {
-    background-color: #17181c; color: #e6e7ea; border: 2px solid #26282d;
-    border-radius: 8px; font-size: 15px; min-height: 44px; max-height: 44px; padding: 0 10px;
-}
-QPushButton#HomeChip:hover { background-color: #202227; }
-QPushButton#HomeChip[inactive="true"] { color: #5c5e65; }
-QPushButton#HomeChip[homeFocus="true"] {
-    border: 2px solid #4169e1; background-color: #1d2640; color: #ffffff;
-}
-QPushButton#HomeChip[adjusting="true"] {
-    border: 2px solid #9db8ff; background-color: #26335a; color: #ffffff;
-}
 QPushButton#HomeHint {
     background: transparent; border: 0; color: #e6e7ea; font-size: 16px; padding: 4px 6px;
 }
 QPushButton#HomeHint:hover { color: #ffffff; }
 QLabel#HomeHintText { color: #e6e7ea; font-size: 16px; background: transparent; }
-QLabel#HomeGlyph {
-    color: #e6e7ea; border: 2px solid #e6e7ea; border-radius: 12px; background: transparent;
-    min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px;
-    font-size: 12px; font-weight: 700;
-}
 )");
+
+/// A controller button as it is printed on the controller player 1 uses: Switch letters in a
+/// ring, Xbox letters on colored buttons, PlayStation symbols, or a keyboard key. The buttons are
+/// matched by position (SDL maps them that way): the right one confirms, the bottom one goes back
+/// and the top one opens options.
+class HomeGlyph : public QWidget {
+public:
+    HomeGlyph(GameHome::ButtonStyle style_, GameHome::HintRole role_, QWidget* parent)
+        : QWidget{parent}, style{style_}, role{role_} {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        if (style == GameHome::ButtonStyle::Keyboard) {
+            QFont key_font = font();
+            key_font.setPixelSize(12);
+            key_font.setBold(true);
+            const int text_w = QFontMetrics(key_font).horizontalAdvance(KeyText());
+            setFixedSize(std::max(26, text_w + 14), 24);
+        } else {
+            setFixedSize(role == GameHome::HintRole::Adjust ? 34 : 26, 26);
+        }
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QColor light(0xe6, 0xe7, 0xea);
+        const QRectF box = QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5);
+
+        if (style == GameHome::ButtonStyle::Keyboard) {
+            painter.setPen(QPen(light, 1.5));
+            painter.setBrush(QColor(0x22, 0x23, 0x28));
+            painter.drawRoundedRect(box, 5, 5);
+            QFont key_font = font();
+            key_font.setPixelSize(12);
+            key_font.setBold(true);
+            painter.setFont(key_font);
+            painter.drawText(rect(), Qt::AlignCenter, KeyText());
+            return;
+        }
+        if (role == GameHome::HintRole::Adjust) {
+            // Left and right on the d-pad or stick.
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(light);
+            const qreal cy = height() / 2.0;
+            painter.drawPolygon(QPolygonF{{2, cy}, {13, cy - 7}, {13, cy + 7}});
+            painter.drawPolygon(QPolygonF{{width() - 2.0, cy}, {width() - 13.0, cy - 7},
+                                          {width() - 13.0, cy + 7}});
+            return;
+        }
+
+        QFont letter_font = font();
+        letter_font.setPixelSize(13);
+        letter_font.setBold(true);
+        painter.setFont(letter_font);
+
+        switch (style) {
+        case GameHome::ButtonStyle::Switch:
+            painter.setPen(QPen(light, 2));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(box);
+            painter.drawText(rect(), Qt::AlignCenter, Letter());
+            break;
+        case GameHome::ButtonStyle::Xbox: {
+            // Xbox prints A green (bottom), B red (right), Y yellow (top), X blue (left).
+            QColor fill;
+            switch (role) {
+            case GameHome::HintRole::Confirm:
+                fill = QColor(0xe0, 0x52, 0x52);
+                break;
+            case GameHome::HintRole::Back:
+                fill = QColor(0x5c, 0xb8, 0x5c);
+                break;
+            default:
+                fill = QColor(0xf0, 0xc3, 0x3c);
+                break;
+            }
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(fill);
+            painter.drawEllipse(box);
+            painter.setPen(role == GameHome::HintRole::Options ? QColor(0x1a, 0x1a, 0x1a)
+                                                               : QColor(Qt::white));
+            painter.drawText(rect(), Qt::AlignCenter, Letter());
+            break;
+        }
+        case GameHome::ButtonStyle::PlayStation: {
+            painter.setPen(QPen(QColor(0x5c, 0x5e, 0x65), 1.5));
+            painter.setBrush(QColor(0x1e, 0x1f, 0x23));
+            painter.drawEllipse(box);
+            const QPointF c = QRectF(rect()).center();
+            const qreal r = width() * 0.22;
+            switch (role) {
+            case GameHome::HintRole::Confirm: // circle, right
+                painter.setPen(QPen(QColor(0xff, 0x6b, 0x7a), 2));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawEllipse(c, r, r);
+                break;
+            case GameHome::HintRole::Back: // cross, bottom
+                painter.setPen(QPen(QColor(0x7a, 0xa7, 0xff), 2, Qt::SolidLine, Qt::RoundCap));
+                painter.drawLine(c + QPointF(-r, -r), c + QPointF(r, r));
+                painter.drawLine(c + QPointF(-r, r), c + QPointF(r, -r));
+                break;
+            default: // triangle, top
+                painter.setPen(QPen(QColor(0x3d, 0xdc, 0x97), 2, Qt::SolidLine, Qt::RoundCap,
+                                    Qt::RoundJoin));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawPolygon(QPolygonF{c + QPointF(0, -r * 1.1),
+                                              c + QPointF(r * 1.05, r * 0.75),
+                                              c + QPointF(-r * 1.05, r * 0.75)});
+                break;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+private:
+    QString Letter() const {
+        // By position: Switch A/B/X, and the same places on Xbox are B/A/Y.
+        const bool xbox = style == GameHome::ButtonStyle::Xbox;
+        switch (role) {
+        case GameHome::HintRole::Confirm:
+            return xbox ? QStringLiteral("B") : QStringLiteral("A");
+        case GameHome::HintRole::Back:
+            return xbox ? QStringLiteral("A") : QStringLiteral("B");
+        default:
+            return xbox ? QStringLiteral("Y") : QStringLiteral("X");
+        }
+    }
+
+    QString KeyText() const {
+        switch (role) {
+        case GameHome::HintRole::Confirm:
+            return QStringLiteral("Enter");
+        case GameHome::HintRole::Back:
+            return QStringLiteral("Esc");
+        case GameHome::HintRole::Options:
+            return QStringLiteral("X");
+        default:
+            return QStringLiteral("\u2190 \u2192");
+        }
+    }
+
+    GameHome::ButtonStyle style;
+    GameHome::HintRole role;
+};
 
 } // namespace
 
@@ -364,6 +494,7 @@ void GameHome::UpdateIconSize() {
 
 void GameHome::SetMenuBar(QMenuBar* menu_bar_) {
     menu_bar = menu_bar_;
+    HideWhileShown(menu_bar_);
     if (isVisible()) {
         RebuildPills();
     }
@@ -412,11 +543,88 @@ void GameHome::RefreshChips() {
             button->setText(text);
         }
         const bool inactive = chips[i].active && !chips[i].active();
-        if (button->property("inactive").toBool() != inactive) {
+        if (button->property("inactive").toBool() != inactive ||
+            button->styleSheet().isEmpty()) {
             button->setProperty("inactive", inactive);
-            Repolish(button);
+            StyleChip(i);
         }
     }
+}
+
+void GameHome::StyleChip(size_t index) {
+    if (index >= chip_buttons.size() || index >= chips.size()) {
+        return;
+    }
+    QPushButton* button = chip_buttons[index];
+    const QColor color = chips[index].color;
+    const bool inactive = button->property("inactive").toBool();
+    const bool focus = button->property("homeFocus").toBool();
+    const bool adjust = button->property("adjusting").toBool();
+    const auto rgba = [&color](double alpha) {
+        return QStringLiteral("rgba(%1, %2, %3, %4)")
+            .arg(color.red())
+            .arg(color.green())
+            .arg(color.blue())
+            .arg(alpha);
+    };
+
+    // The status bar's colors: a tint of the category color, grey when the setting is off. The
+    // focused chip gets a border in its own color, white while it is being adjusted.
+    QString background = inactive ? QStringLiteral("#17181c") : rgba(focus ? 0.28 : 0.14);
+    const QString text = inactive ? QStringLiteral("#5c5e65") : color.name();
+    QString border = QStringLiteral("transparent");
+    if (adjust) {
+        border = QStringLiteral("#ffffff");
+    } else if (focus) {
+        border = inactive ? QStringLiteral("#8b8d94") : color.name();
+    }
+    if (inactive && focus) {
+        background = QStringLiteral("#202227");
+    }
+    button->setStyleSheet(
+        QStringLiteral("QPushButton { background-color: %1; color: %2; border: 2px solid %3;"
+                       " border-radius: 8px; font-size: 15px; min-height: 44px;"
+                       " max-height: 44px; padding: 0 10px; }"
+                       "QPushButton:hover { background-color: %4; }")
+            .arg(background, text, border, inactive ? QStringLiteral("#202227") : rgba(0.24)));
+}
+
+void GameHome::SetButtonStyle(ButtonStyle style) {
+    if (button_style == style) {
+        return;
+    }
+    button_style = style;
+    UpdateHints();
+}
+
+void GameHome::HideWhileShown(QWidget* bar) {
+    if (bar == nullptr) {
+        return;
+    }
+    bar->installEventFilter(this);
+    HiddenBar entry{bar, bar->isVisible()};
+    if (isVisible()) {
+        bar->hide();
+    }
+    hidden_bars.push_back(entry);
+}
+
+bool GameHome::eventFilter(QObject* object, QEvent* event) {
+    // Something showed a hidden bar while the home screen is up (leaving fullscreen does):
+    // remember that it should come back afterwards, and hide it again.
+    if (event->type() == QEvent::Show && isVisible()) {
+        for (HiddenBar& entry : hidden_bars) {
+            if (entry.bar == object) {
+                entry.was_visible = true;
+                QTimer::singleShot(0, entry.bar, [this, bar = entry.bar] {
+                    if (bar && isVisible()) {
+                        bar->hide();
+                    }
+                });
+            }
+        }
+    }
+    return QListView::eventFilter(object, event);
 }
 
 void GameHome::RebuildPills() {
@@ -543,9 +751,13 @@ void GameHome::showEvent(QShowEvent* event) {
             window()->addActions(with_shortcuts);
             shortcuts_moved = true;
         }
-        menu_bar_was_visible = menu_bar->isVisible() || menu_bar_was_visible;
-        menu_bar->hide();
         RebuildPills();
+    }
+    for (HiddenBar& entry : hidden_bars) {
+        if (entry.bar) {
+            entry.was_visible = entry.bar->isVisible();
+            entry.bar->hide();
+        }
     }
     LayoutChrome();
     RefreshChips();
@@ -562,8 +774,10 @@ void GameHome::showEvent(QShowEvent* event) {
 
 void GameHome::hideEvent(QHideEvent* event) {
     QListView::hideEvent(event);
-    if (menu_bar && menu_bar_was_visible) {
-        menu_bar->show();
+    for (const HiddenBar& entry : hidden_bars) {
+        if (entry.bar && entry.was_visible) {
+            entry.bar->show();
+        }
     }
     pulse_animation->stop();
     refresh_timer->stop();
@@ -595,7 +809,7 @@ void GameHome::UpdateFocusStyles() {
             chip_buttons[i]->property("adjusting").toBool() != adjust) {
             chip_buttons[i]->setProperty("homeFocus", focus);
             chip_buttons[i]->setProperty("adjusting", adjust);
-            Repolish(chip_buttons[i]);
+            StyleChip(i);
         }
     }
 }
@@ -629,28 +843,28 @@ void GameHome::UpdateHeader() {
 
 void GameHome::UpdateHints() {
     struct Hint {
-        QString glyph;
+        HintRole role;
         QString text;
         std::function<void()> action;
     };
     std::vector<Hint> hints;
     switch (row) {
     case Row::Cards:
-        hints = {{QStringLiteral("X"), tr("Options"), [this] { OpenOptions(); }},
-                 {QStringLiteral("A"), tr("Play"), [this] { ActivateCurrent(); }}};
+        hints = {{HintRole::Options, tr("Options"), [this] { OpenOptions(); }},
+                 {HintRole::Confirm, tr("Play"), [this] { ActivateCurrent(); }}};
         break;
     case Row::Chips:
         if (adjusting) {
-            hints = {{QStringLiteral("↔"), tr("Adjust"), nullptr},
-                     {QStringLiteral("A"), tr("Done"), [this] { ActivateChip(focused_chip); }}};
+            hints = {{HintRole::Adjust, tr("Adjust"), nullptr},
+                     {HintRole::Confirm, tr("Done"), [this] { ActivateChip(focused_chip); }}};
         } else {
-            hints = {{QStringLiteral("B"), tr("Back"), [this] { SetRow(Row::Cards); }},
-                     {QStringLiteral("A"), tr("Change"), [this] { ActivateChip(focused_chip); }}};
+            hints = {{HintRole::Back, tr("Back"), [this] { SetRow(Row::Cards); }},
+                     {HintRole::Confirm, tr("Change"), [this] { ActivateChip(focused_chip); }}};
         }
         break;
     case Row::Menus:
-        hints = {{QStringLiteral("B"), tr("Back"), [this] { SetRow(Row::Cards); }},
-                 {QStringLiteral("A"), tr("Open"), [this] { OpenMenu(focused_pill); }}};
+        hints = {{HintRole::Back, tr("Back"), [this] { SetRow(Row::Cards); }},
+                 {HintRole::Confirm, tr("Open"), [this] { OpenMenu(focused_pill); }}};
         break;
     }
 
@@ -670,16 +884,13 @@ void GameHome::UpdateHints() {
         auto* inner = new QHBoxLayout(button);
         inner->setContentsMargins(6, 0, 6, 0);
         inner->setSpacing(8);
-        auto* glyph = new QLabel(hint.glyph, button);
-        glyph->setObjectName(QStringLiteral("HomeGlyph"));
-        glyph->setAlignment(Qt::AlignCenter);
-        glyph->setAttribute(Qt::WA_TransparentForMouseEvents);
+        auto* glyph = new HomeGlyph(button_style, hint.role, button);
         auto* text = new QLabel(hint.text, button);
         text->setObjectName(QStringLiteral("HomeHintText"));
         text->setAttribute(Qt::WA_TransparentForMouseEvents);
         inner->addWidget(glyph);
         inner->addWidget(text);
-        button->setMinimumWidth(glyph->sizeHint().width() + text->sizeHint().width() + 32);
+        button->setMinimumWidth(glyph->width() + text->sizeHint().width() + 32);
         button->setMinimumHeight(36);
         if (hint.action) {
             connect(button, &QPushButton::clicked, this, hint.action);

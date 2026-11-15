@@ -454,6 +454,8 @@ private slots:
     void SetHomeView();
     /// Hands the home view the menus and the quick-setting chips (the status bar's settings).
     void SetupHomeView();
+    /// The home view's button hints follow the controller player 1 uses.
+    void UpdateHomeButtonStyle();
 
     void CheckIconSize();
     void ToggleShowGameName();

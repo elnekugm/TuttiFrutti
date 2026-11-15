@@ -740,6 +740,12 @@ static std::filesystem::path CoverDir() {
 }
 
 std::filesystem::path DownloadedCoverPath(u64 program_id) {
+    return CoverDir() / fmt::format("{:016X}_hd.jpg", program_id);
+}
+
+/// Where covers were saved before they were kept at up to 1024 pixels (512 pixels, upscaled from
+/// 500 for eShop art). Still shown until the larger one is downloaded in its place.
+static std::filesystem::path LegacyDownloadedCoverPath(u64 program_id) {
     return CoverDir() / fmt::format("{:016X}.jpg", program_id);
 }
 
@@ -762,7 +768,13 @@ static std::vector<u8> ReadImageFile(const std::filesystem::path& path) {
 }
 
 std::vector<u8> ReadDownloadedCover(u64 program_id) {
-    return program_id == 0 ? std::vector<u8>{} : ReadImageFile(DownloadedCoverPath(program_id));
+    if (program_id == 0) {
+        return {};
+    }
+    if (auto cover = ReadImageFile(DownloadedCoverPath(program_id)); !cover.empty()) {
+        return cover;
+    }
+    return ReadImageFile(LegacyDownloadedCoverPath(program_id));
 }
 
 std::vector<u8> ReadDownloadedBanner(u64 program_id) {

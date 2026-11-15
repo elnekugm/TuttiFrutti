@@ -653,6 +653,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // Controllers can be plugged in at any time; looking every two seconds is cheap.
     gamepad_timer.setInterval(2000);
     connect(&gamepad_timer, &QTimer::timeout, this, &MainWindow::CheckForGamepad);
+    connect(&gamepad_timer, &QTimer::timeout, this, &MainWindow::UpdateHomeButtonStyle);
     gamepad_timer.start();
     QTimer::singleShot(500, this, &MainWindow::CheckForGamepad);
     update_input_timer.start();
@@ -4273,10 +4274,14 @@ void MainWindow::SetHomeView() {
 
 void MainWindow::SetupHomeView() {
     game_list->SetHomeMenuBar(ui->menubar);
+    // The chips below the games show the same settings: the status bar is hidden there.
+    game_list->Home()->HideWhileShown(statusBar());
 
-    const auto button_chip = [](const QString& caption, QPushButton* button, bool dims) {
+    const auto button_chip = [](const QString& caption, QPushButton* button, bool dims,
+                                QColor color) {
         HomeChip chip;
         chip.caption = caption;
+        chip.color = color;
         chip.text = [button] {
             QString text = button->text();
             text.remove(QLatin1Char{'&'});
@@ -4294,12 +4299,14 @@ void MainWindow::SetupHomeView() {
     };
 
     std::vector<HomeChip> chips;
-    chips.push_back(button_chip(tr("Renderer"), renderer_status_button, false));
+    chips.push_back(button_chip(tr("Renderer"), renderer_status_button, false,
+                                QColor(0xf0, 0x38, 0x6b)));
 
     // The Switch 2 VSync rate games start frames on. Above 60 only games with a real-time step
     // (Ocarina of Time's FPS Unlock, for example) keep their speed.
     HomeChip frame_rate;
     frame_rate.caption = tr("Frame Rate");
+    frame_rate.color = QColor(0x4a, 0xde, 0x80);
     frame_rate.text = [] {
         return tr("%1 FPS").arg(Settings::values.frame_rate_limit.GetValue());
     };
@@ -4317,15 +4324,21 @@ void MainWindow::SetupHomeView() {
     };
     chips.push_back(std::move(frame_rate));
 
-    chips.push_back(button_chip(tr("GPU Accuracy"), gpu_accuracy_button, false));
-    chips.push_back(button_chip(tr("Mode"), dock_status_button, false));
-    chips.push_back(button_chip(tr("Filter"), filter_status_button, true));
-    chips.push_back(button_chip(tr("Anti-Aliasing"), aa_status_button, true));
-    chips.push_back(button_chip(tr("Post Effects"), post_shader_status_button, true));
-    chips.push_back(button_chip(tr("Frame Gen"), frame_gen_status_button, true));
+    chips.push_back(button_chip(tr("GPU Accuracy"), gpu_accuracy_button, false,
+                                QColor(0xf5, 0xb9, 0x42)));
+    chips.push_back(button_chip(tr("Mode"), dock_status_button, false, QColor(0x60, 0xa5, 0xfa)));
+    chips.push_back(button_chip(tr("Filter"), filter_status_button, true,
+                                QColor(0xa7, 0x8b, 0xfa)));
+    chips.push_back(button_chip(tr("Anti-Aliasing"), aa_status_button, true,
+                                QColor(0x22, 0xd3, 0xee)));
+    chips.push_back(button_chip(tr("Post Effects"), post_shader_status_button, true,
+                                QColor(0xa3, 0xd9, 0x5e)));
+    chips.push_back(button_chip(tr("Frame Gen"), frame_gen_status_button, true,
+                                QColor(0xff, 0x8a, 0x4c)));
 
     HomeChip volume;
     volume.caption = tr("Volume");
+    volume.color = QColor(0xe8, 0x79, 0xf9);
     volume.text = [] {
         if (Settings::values.audio_muted) {
             return tr("Muted");
@@ -4344,6 +4357,65 @@ void MainWindow::SetupHomeView() {
     chips.push_back(std::move(volume));
 
     game_list->SetHomeChips(std::move(chips));
+    UpdateHomeButtonStyle();
+}
+
+void MainWindow::UpdateHomeButtonStyle() {
+    if (!QtCommon::system || !input_subsystem || game_list == nullptr) {
+        return;
+    }
+    auto* const player1 =
+        QtCommon::system->HIDCore().GetEmulatedController(Core::HID::NpadIdType::Player1);
+    if (player1 == nullptr) {
+        return;
+    }
+    const auto param = player1->GetButtonParam(Settings::NativeButton::A);
+    const std::string engine = param.Get("engine", "");
+    auto style = GameHome::ButtonStyle::Keyboard;
+    if (engine == "joycon" || engine == "virtual_amiibo") {
+        style = GameHome::ButtonStyle::Switch;
+    } else if (engine == "sdl") {
+        // SDL names the pad: "DualSense Wireless Controller", "Xbox Series X Controller",
+        // "Nintendo Switch Pro Controller", ... Anything not Sony or Nintendo prints Xbox's
+        // letters (Stadia, 8BitDo in X-input mode and most others do).
+        style = GameHome::ButtonStyle::Xbox;
+        const std::string guid = param.Get("guid", "");
+        const int port = param.Get("port", 0);
+        for (const auto& device : input_subsystem->GetInputDevices()) {
+            if (device.Get("engine", "") != "sdl" || device.Get("guid", "") != guid ||
+                device.Get("port", 0) != port) {
+                continue;
+            }
+            const QString name = QString::fromStdString(device.Get("display", "")).toLower();
+            static const QStringList sony{
+                QStringLiteral("dualsense"),   QStringLiteral("dualshock"),
+                QStringLiteral("playstation"), QStringLiteral("ps3"),
+                QStringLiteral("ps4"),         QStringLiteral("ps5"),
+                QStringLiteral("sony"),        QStringLiteral("wireless controller"),
+            };
+            static const QStringList nintendo{
+                QStringLiteral("nintendo"), QStringLiteral("pro controller"),
+                QStringLiteral("joy-con"),  QStringLiteral("joycon"),
+                QStringLiteral("switch"),
+            };
+            const auto any_of = [&name](const QStringList& words) {
+                return std::ranges::any_of(words,
+                                           [&name](const QString& w) { return name.contains(w); });
+            };
+            if (name.contains(QStringLiteral("xbox")) || name.contains(QStringLiteral("x-box"))) {
+                // "Xbox Wireless Controller" would otherwise match Sony's plain name.
+                style = GameHome::ButtonStyle::Xbox;
+            } else if (any_of(sony)) {
+                style = GameHome::ButtonStyle::PlayStation;
+            } else if (any_of(nintendo)) {
+                style = GameHome::ButtonStyle::Switch;
+            }
+            break;
+        }
+    } else if (!engine.empty() && engine != "keyboard") {
+        style = GameHome::ButtonStyle::Xbox;
+    }
+    game_list->Home()->SetButtonStyle(style);
 }
 
 void MainWindow::CheckIconSize() {

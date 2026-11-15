@@ -99,6 +99,9 @@ public:
     /// The home view's pills (the main menus) and quick-setting chips.
     void SetHomeMenuBar(QMenuBar* menu_bar);
     void SetHomeChips(std::vector<HomeChip> chips);
+    [[nodiscard]] GameHome* Home() const {
+        return home_view;
+    }
 
 public slots:
     void SetNupConversionRunning(bool running);
