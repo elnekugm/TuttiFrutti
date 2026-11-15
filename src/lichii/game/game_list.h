@@ -28,6 +28,7 @@
 #include "qt_common/config/uisettings.h"
 #include "qt_common/game_list/model.h"
 #include "qt_common/util/game.h"
+#include "lichii/game/game_home.h"
 
 class QVariantAnimation;
 
@@ -44,6 +45,7 @@ enum class AmLaunchType;
 enum class StartGameType;
 
 class GameCarousel;
+class QTimer;
 
 class QAbstractItemView;
 namespace Core {
@@ -93,6 +95,10 @@ public:
     void UnloadController();
 
     void ResetViewMode();
+
+    /// The home view's pills (the main menus) and quick-setting chips.
+    void SetHomeMenuBar(QMenuBar* menu_bar);
+    void SetHomeChips(std::vector<HomeChip> chips);
 
 public slots:
     void SetNupConversionRunning(bool running);
@@ -196,10 +202,16 @@ private:
     GameTree* tree_view = nullptr;
     GameGrid* grid_view = nullptr;
     GameCarousel* carousel_view = nullptr;
+    GameHome* home_view = nullptr;
     GameListModel* item_model = nullptr;
     Settings::GameListMode game_list_mode;
 
     ControllerNavigation* controller_navigation = nullptr;
+    /// Repeats a held d-pad or stick direction, as a held arrow key does.
+    QTimer* controller_repeat = nullptr;
+    Qt::Key controller_repeat_key = Qt::Key_unknown;
+    int home_wheel_delta = 0;
+    void PostControllerKey(Qt::Key key, bool repeat);
 
     QVariantAnimation* vertical_scroll = nullptr;
     QVariantAnimation* horizontal_scroll = nullptr;

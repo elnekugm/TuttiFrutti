@@ -963,6 +963,8 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                           {
                               PAIR(GameListMode, TreeView, tr("Tree View")),
                               PAIR(GameListMode, GridView, tr("Grid View")),
+                              PAIR(GameListMode, CarouselView, tr("Carousel View")),
+                              PAIR(GameListMode, HomeView, tr("Home View")),
                           }});
 
 #undef PAIR

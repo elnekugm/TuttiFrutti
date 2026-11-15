@@ -112,6 +112,7 @@
      <addaction name="action_Tree_View"/>
      <addaction name="action_Grid_View"/>
      <addaction name="action_Carousel_View"/>
+     <addaction name="action_Home_View"/>
     </widget>
     <widget class="QMenu" name="menuGame_Icon_Size">
      <property name="title">
@@ -641,6 +642,14 @@
   <action name="action_Post_Processing_Shaders">
    <property name="text">
     <string>Post-Processing &amp;Shaders...</string>
+   </property>
+  </action>
+  <action name="action_Home_View">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>&amp;Home View (controller)</string>
    </property>
   </action>
   <action name="action_Carousel_View">

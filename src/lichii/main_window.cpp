@@ -1474,6 +1474,8 @@ void MainWindow::InitializeWidgets() {
 
     statusBar()->setVisible(true);
     setStyleSheet(QStringLiteral("QStatusBar::item{border: none;}"));
+
+    SetupHomeView();
 }
 
 void MainWindow::InitializeDebugWidgets() {
@@ -1824,6 +1826,7 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Grid_View, &MainWindow::SetGridView);
     connect_menu(ui->action_Tree_View, &MainWindow::SetTreeView);
     connect_menu(ui->action_Carousel_View, &MainWindow::SetCarouselView);
+    connect_menu(ui->action_Home_View, &MainWindow::SetHomeView);
 
     game_size_actions = new QActionGroup(this);
     game_size_actions->setExclusive(true);
@@ -4243,6 +4246,7 @@ void MainWindow::SetGameListMode(Settings::GameListMode mode) {
     ui->action_Grid_View->setChecked(mode == Settings::GameListMode::GridView);
     ui->action_Tree_View->setChecked(mode == Settings::GameListMode::TreeView);
     ui->action_Carousel_View->setChecked(mode == Settings::GameListMode::CarouselView);
+    ui->action_Home_View->setChecked(mode == Settings::GameListMode::HomeView);
 
     UISettings::values.game_list_mode = mode;
     ui->action_Show_Game_Name->setEnabled(mode != Settings::GameListMode::TreeView);
@@ -4261,6 +4265,85 @@ void MainWindow::SetTreeView() {
 
 void MainWindow::SetCarouselView() {
     SetGameListMode(Settings::GameListMode::CarouselView);
+}
+
+void MainWindow::SetHomeView() {
+    SetGameListMode(Settings::GameListMode::HomeView);
+}
+
+void MainWindow::SetupHomeView() {
+    game_list->SetHomeMenuBar(ui->menubar);
+
+    const auto button_chip = [](const QString& caption, QPushButton* button, bool dims) {
+        HomeChip chip;
+        chip.caption = caption;
+        chip.text = [button] {
+            QString text = button->text();
+            text.remove(QLatin1Char{'&'});
+            return text;
+        };
+        if (dims) {
+            chip.active = [button] { return button->isChecked(); };
+        }
+        chip.activate = [button] {
+            if (button->isEnabled()) {
+                button->click();
+            }
+        };
+        return chip;
+    };
+
+    std::vector<HomeChip> chips;
+    chips.push_back(button_chip(tr("Renderer"), renderer_status_button, false));
+
+    // The Switch 2 VSync rate games start frames on. Above 60 only games with a real-time step
+    // (Ocarina of Time's FPS Unlock, for example) keep their speed.
+    HomeChip frame_rate;
+    frame_rate.caption = tr("Frame Rate");
+    frame_rate.text = [] {
+        return tr("%1 FPS").arg(Settings::values.frame_rate_limit.GetValue());
+    };
+    frame_rate.activate = [] {
+        static constexpr std::array<u16, 3> rates{30, 60, 120};
+        const u16 current = Settings::values.frame_rate_limit.GetValue();
+        u16 next = rates.front();
+        for (const u16 rate : rates) {
+            if (rate > current) {
+                next = rate;
+                break;
+            }
+        }
+        Settings::values.frame_rate_limit.SetValue(next);
+    };
+    chips.push_back(std::move(frame_rate));
+
+    chips.push_back(button_chip(tr("GPU Accuracy"), gpu_accuracy_button, false));
+    chips.push_back(button_chip(tr("Mode"), dock_status_button, false));
+    chips.push_back(button_chip(tr("Filter"), filter_status_button, true));
+    chips.push_back(button_chip(tr("Anti-Aliasing"), aa_status_button, true));
+    chips.push_back(button_chip(tr("Post Effects"), post_shader_status_button, true));
+    chips.push_back(button_chip(tr("Frame Gen"), frame_gen_status_button, true));
+
+    HomeChip volume;
+    volume.caption = tr("Volume");
+    volume.text = [] {
+        if (Settings::values.audio_muted) {
+            return tr("Muted");
+        }
+        return QStringLiteral("%1%").arg(Settings::values.volume.GetValue());
+    };
+    volume.active = [] { return !Settings::values.audio_muted; };
+    volume.adjust = [this](int step) {
+        Settings::values.audio_muted = false;
+        const int value = std::clamp(static_cast<int>(Settings::values.volume.GetValue()) +
+                                         step * 5,
+                                     0, 200);
+        Settings::values.volume.SetValue(static_cast<u8>(value));
+        UpdateVolumeUI();
+    };
+    chips.push_back(std::move(volume));
+
+    game_list->SetHomeChips(std::move(chips));
 }
 
 void MainWindow::CheckIconSize() {

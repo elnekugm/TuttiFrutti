@@ -232,6 +232,7 @@ public:
             }
             case Settings::GameListMode::GridView:
             case Settings::GameListMode::CarouselView:
+            case Settings::GameListMode::HomeView:
                 return row1;
             default:
                 break;

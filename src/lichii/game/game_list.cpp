@@ -29,6 +29,7 @@
 #include <QMenu>
 #include <QScrollBar>
 #include <QScroller>
+#include <QTimer>
 #include <QScrollerProperties>
 #include <QToolButton>
 #include <QFutureWatcher>
@@ -55,6 +56,7 @@
 #include "qt_common/util/game.h"
 #include "lichii/game/carousel.h"
 #include "lichii/game/game_grid.h"
+#include "lichii/game/game_home.h"
 #include "lichii/game/game_list.h"
 #include "lichii/game/game_tree.h"
 #include "lichii/game/search_field.h"
@@ -103,16 +105,21 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
     connect(carousel_view, &QListView::activated, this, &GameList::ValidateEntry);
     connect(carousel_view, &QListView::customContextMenuRequested, this, &GameList::PopupContextMenu);
 
+    connect(home_view, &QListView::activated, this, &GameList::ValidateEntry);
+    connect(home_view, &QListView::customContextMenuRequested, this, &GameList::PopupContextMenu);
+
+    controller_repeat = new QTimer(this);
+    connect(controller_repeat, &QTimer::timeout, this, [this] {
+        controller_repeat->setInterval(110);
+        PostControllerKey(controller_repeat_key, true);
+    });
     connect(controller_navigation, &ControllerNavigation::TriggerKeyboardEvent, this,
+            [this](Qt::Key key) { PostControllerKey(key, false); });
+    connect(controller_navigation, &ControllerNavigation::TriggerKeyboardRelease, this,
             [this](Qt::Key key) {
-                if (system.IsPoweredOn()) {
-                    return;
+                if (key == Qt::Key_unknown || key == controller_repeat_key) {
+                    controller_repeat->stop();
                 }
-                if (!this->isActiveWindow()) {
-                    return;
-                }
-                QKeyEvent* event = new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier);
-                QCoreApplication::postEvent(m_currentView, event);
             });
 
     connect(item_model, &GameListModel::PopulatingCompleted, this,
@@ -129,6 +136,43 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
     qRegisterMetaType<QList<QStandardItem*>>("QList<QStandardItem*>");
 
     ResetViewMode();
+}
+
+void GameList::PostControllerKey(Qt::Key key, bool repeat) {
+    if (system.IsPoweredOn()) {
+        controller_repeat->stop();
+        return;
+    }
+    // An open menu (a game's options, a menu from the home view) takes the keys first, so it can
+    // be used with the controller too.
+    QWidget* target = QApplication::activePopupWidget();
+    if (target == nullptr) {
+        if (!this->isActiveWindow() || !this->isVisible()) {
+            controller_repeat->stop();
+            return;
+        }
+        target = m_currentView;
+    }
+    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
+
+    if (!repeat) {
+        const bool direction = key == Qt::Key_Left || key == Qt::Key_Right ||
+                               key == Qt::Key_Up || key == Qt::Key_Down;
+        if (direction) {
+            controller_repeat_key = key;
+            controller_repeat->start(380);
+        } else {
+            controller_repeat->stop();
+        }
+    }
+}
+
+void GameList::SetHomeMenuBar(QMenuBar* menu_bar) {
+    home_view->SetMenuBar(menu_bar);
+}
+
+void GameList::SetHomeChips(std::vector<HomeChip> chips) {
+    home_view->SetChips(std::move(chips));
 }
 
 void GameList::SetNupConversionRunning(bool running) {
@@ -151,10 +195,12 @@ void GameList::SetupViews() {
     tree_view = new GameTree(this);
     grid_view = new GameGrid(this);
     carousel_view = new GameCarousel(this);
+    home_view = new GameHome(this);
 
     tree_view->SetModel(item_model);
     grid_view->SetModel(item_model);
     carousel_view->SetModel(item_model);
+    home_view->SetModel(item_model);
 }
 
 QString GameList::GetLastFilterResultItem() const {
@@ -192,6 +238,9 @@ void GameList::OnPopulate() {
         break;
     case Settings::GameListMode::CarouselView:
         carousel_view->UpdateIconSize();
+        break;
+    case Settings::GameListMode::HomeView:
+        home_view->UpdateIconSize();
         break;
     }
 }
@@ -245,6 +294,11 @@ void GameList::ResetViewMode() {
         newTreeMode = false;
 
         break;
+    case Settings::GameListMode::HomeView:
+        m_currentView = home_view;
+        newTreeMode = false;
+
+        break;
     default:
         UNREACHABLE();
     }
@@ -252,10 +306,12 @@ void GameList::ResetViewMode() {
     tree_view->setVisible(false);
     grid_view->setVisible(false);
     carousel_view->setVisible(false);
+    home_view->setVisible(false);
 
     tree_view->setEnabled(false);
     grid_view->setEnabled(false);
     carousel_view->setEnabled(false);
+    home_view->setEnabled(false);
 
     m_currentView->setVisible(true);
     // MainWindow switches the view right after starting the first populate; keep it disabled
@@ -295,6 +351,8 @@ void GameList::OnTextChanged(const QString& new_text) {
         tree_view->ApplyFilter(edit_filter_text, item_model);
     } else {
         grid_view->ApplyFilter(edit_filter_text, item_model);
+        carousel_view->ApplyFilter(edit_filter_text, item_model);
+        home_view->ApplyFilter(edit_filter_text, item_model);
     }
 }
 
@@ -892,6 +950,9 @@ void GameList::UpdateIconSizes() {
     case Settings::GameListMode::CarouselView:
         carousel_view->UpdateIconSize();
         break;
+    case Settings::GameListMode::HomeView:
+        home_view->UpdateIconSize();
+        break;
     case Settings::GameListMode::TreeView:
         break;
     }
@@ -1357,6 +1418,22 @@ void GameList::SetupScrollAnimation() {
 }
 
 bool GameList::eventFilter(QObject* obj, QEvent* event) {
+    // The home view's wheel steps through the games, one per notch.
+    if (obj == home_view->viewport() && event->type() == QEvent::Wheel) {
+        const auto* wheel = static_cast<QWheelEvent*>(event);
+        const QPoint delta = wheel->angleDelta();
+        home_wheel_delta += delta.y() != 0 ? delta.y() : delta.x();
+        while (home_wheel_delta >= 120) {
+            home_view->StepSelection(-1);
+            home_wheel_delta -= 120;
+        }
+        while (home_wheel_delta <= -120) {
+            home_view->StepSelection(1);
+            home_wheel_delta += 120;
+        }
+        return true;
+    }
+
     if (obj == m_currentView->viewport() && event->type() == QEvent::Wheel) {
         QWheelEvent* wheelEvent = static_cast<QWheelEvent*>(event);
 
