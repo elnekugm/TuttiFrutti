@@ -517,6 +517,9 @@ private:
     void UpdateUISettings();
     void UpdateInputDrivers();
     void HideMouseCursor();
+    /// Gives player 1 a connected gamepad while it is on the keyboard, and the keyboard back when
+    /// that gamepad is unplugged. Nothing is saved: every launch finds the gamepad again.
+    void CheckForGamepad();
     void ShowMouseCursor();
     void OpenURL(const QUrl& url);
     void LoadTranslation();
@@ -651,6 +654,10 @@ private:
     u32 sleep_assertion_id = 0;
 #endif
     QTimer mouse_hide_timer;
+    /// Looks for a connected gamepad for player 1 (CheckForGamepad).
+    QTimer gamepad_timer;
+    /// "guid:port" of the gamepad player 1 was given automatically; empty when none.
+    std::string auto_gamepad;
     QTimer update_input_timer;
 
     QString startup_icon_theme;

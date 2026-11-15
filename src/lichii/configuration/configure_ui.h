@@ -7,6 +7,7 @@
 #include <QWidget>
 #include "common/settings_enums.h"
 
+class QCheckBox;
 class QLineEdit;
 
 namespace Core {
@@ -54,6 +55,7 @@ private:
 
     std::unique_ptr<Ui::ConfigureUi> ui;
     QLineEdit* steamgriddb_key_edit = nullptr;
+    QCheckBox* download_covers_checkbox = nullptr;
 
     Settings::AspectRatio ratio;
     Settings::ResolutionSetup resolution_setting;

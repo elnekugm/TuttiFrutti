@@ -342,8 +342,9 @@ QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::stri
     }
 
     u64 play_time = play_time_manager.GetPlayTime(program_id);
-    // Artwork the user picked replaces the icon from the game file.
-    const std::vector<u8> custom_artwork = QtCommon::Game::ReadCustomArtwork(program_id);
+    // Artwork the user picked replaces the icon from the game file, and so does downloaded cover
+    // art (the same picture at a higher resolution).
+    const std::vector<u8> custom_artwork = QtCommon::Game::ReadLibraryArtwork(program_id);
     // So does the name the user gave the game in Properties.
     const std::string custom_title = QtCommon::Game::ReadCustomTitle(program_id);
     return QList<QStandardItem*>{

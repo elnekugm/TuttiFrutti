@@ -174,8 +174,15 @@ private:
     /// Downloads Metadata.zip and rebuilds the Switch-only index; done(true) on success.
     void UpdateLaunchBoxArtDatabase(std::function<void(bool)> done = {});
     void StartArtworkLookups();
-    /// Shows the program's custom artwork in every library entry of it, without a rescan.
+    /// Shows the program's custom artwork, else its downloaded cover, in every library entry of
+    /// it, without a rescan.
     void ShowCustomArtwork(u64 program_id);
+    /// Queues a cover art download for every game without one, once per game per session.
+    void QueueCoverDownloads();
+    /// Queues one game; a forced download runs again even when a cover is already there. The
+    /// title finds games the title ID lookup does not have.
+    void QueueCoverDownload(u64 program_id, const QString& title, bool forced);
+    void StartCoverDownloads();
     QString GameTitle(u64 program_id) const;
 
     friend class GameListSearchField;
@@ -230,6 +237,16 @@ private:
     /// Programs whose looked up artwork was saved since the last scan finished. A scan can add
     /// their rows with the default picture after the save, so the artwork is shown again.
     QSet<u64> artwork_saved;
+    /// Cover art downloads, queued by program ID with the game's title.
+    struct CoverDownload {
+        u64 program_id;
+        QString title;
+    };
+    QList<CoverDownload> cover_queue;
+    QSet<u64> cover_attempted;
+    int cover_running = 0;
+    int cover_network_failures = 0;
+    bool cover_failure_logged = false;
     std::shared_ptr<std::atomic_bool> artwork_cancel = std::make_shared<std::atomic_bool>(false);
     /// Lookups wait on the network: their own threads keep them from holding up a library scan
     /// on the global pool.

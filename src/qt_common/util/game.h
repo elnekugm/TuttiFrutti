@@ -93,6 +93,26 @@ std::vector<u8> ReadCustomArtwork(u64 program_id);
 /// Deletes the program's custom artwork. Returns true when none is left.
 bool RemoveCustomArtwork(u64 program_id);
 
+// Downloaded cover art //
+
+/// The cover art downloaded for a program (square, JPEG). It is cached, so it can be downloaded
+/// again at any time; custom artwork the user picked always wins over it.
+std::filesystem::path DownloadedCoverPath(u64 program_id);
+
+/// The wide banner art downloaded for a program (1920x1080, JPEG), shown by the loading screen.
+std::filesystem::path DownloadedBannerPath(u64 program_id);
+
+/// Marks a program the cover service has no art for, so it is not asked again every launch.
+std::filesystem::path NoCoverMarkerPath(u64 program_id);
+
+/// The downloaded cover or banner file bytes, or empty when there is none.
+std::vector<u8> ReadDownloadedCover(u64 program_id);
+std::vector<u8> ReadDownloadedBanner(u64 program_id);
+
+/// The picture the library shows for a program: its custom artwork, else its downloaded cover.
+/// Empty when it has neither, and the game file's own icon is used.
+std::vector<u8> ReadLibraryArtwork(u64 program_id);
+
 // Custom name //
 
 /// Where the name the user gave a program is stored (one UTF-8 line). Like custom artwork it

@@ -179,6 +179,14 @@ struct Values {
     // Optional key that enables the SteamGridDB icon fallback
     Setting<std::string> steamgriddb_api_key{linkage, {}, "steamgriddb_api_key", Category::Ui};
 
+    // Downloads cover and banner art for every game in the library (api.nlib.cc by title ID,
+    // else Nintendo's eShop search by name)
+    Setting<bool> download_cover_art{linkage, true, "download_cover_art", Category::Ui};
+
+    // Player 1 uses a connected gamepad (Xbox, PlayStation and others) while it is mapped to the
+    // keyboard, and goes back to the keyboard when the gamepad is unplugged
+    Setting<bool> auto_use_gamepad{linkage, true, "auto_use_gamepad", Category::Ui};
+
     std::string theme;
 
     // Shortcut name <Shortcut, context>

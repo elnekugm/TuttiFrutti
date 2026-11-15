@@ -7,14 +7,17 @@
 
 #include <chrono>
 #include <memory>
+#include <vector>
+#include <QElapsedTimer>
+#include <QImage>
+#include <QPixmap>
 #include <QPointer>
 #include <QString>
+#include <QTimer>
 #include <QWidget>
 #include <QtGlobal>
 
-#if !QT_CONFIG(movie)
-#define LICHII_QT_MOVIE_MISSING 1
-#endif
+#include "common/common_types.h"
 
 namespace Loader {
 class AppLoader;
@@ -28,16 +31,16 @@ namespace VideoCore {
 enum class LoadCallbackStage;
 }
 
-class QBuffer;
-class QByteArray;
 class QGraphicsOpacityEffect;
-class QMovie;
 class QPropertyAnimation;
 class QPushButton;
 class QMessageBox;
 class QAbstractButton;
 class ControllerNavigation;
 
+/// The screen shown while a game loads: the game's art fills the window and pans slowly, with its
+/// title at the bottom left, the loading stage at the bottom right and a progress line along the
+/// bottom edge.
 class LoadingScreen : public QWidget {
     Q_OBJECT
 
@@ -46,12 +49,20 @@ public:
 
     ~LoadingScreen();
 
-    /// Call before showing the loading screen to load the widgets with the logo and banner for the
-    /// currently loaded application.
+    /// The details shown for the game that is about to load. Call before Prepare; the title, the
+    /// developer and the version come from the updated game's control data.
+    void SetGameDetails(u64 program_id, const QString& title, const QString& developer,
+                        const QString& version);
+
+    /// Call before showing the loading screen to load the art of the application being loaded:
+    /// its downloaded banner, else its custom artwork, else its downloaded cover, else its icon.
     void Prepare(Loader::AppLoader& loader);
 
+    /// Shows the program's art again, after its banner or cover was downloaded while it loads.
+    void ReloadArt(u64 program_id);
+
     /// After the loading screen is hidden, the owner of this class can call this to clean up any
-    /// used resources such as the logo and banner.
+    /// used resources such as the game's art.
     void Clear();
 
     /// Slot used to update the status of the progress bar
@@ -76,14 +87,25 @@ signals:
     /// widget
     void Hidden();
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
 private:
-#ifndef LICHII_QT_MOVIE_MISSING
-    std::unique_ptr<QMovie> animation;
-    std::unique_ptr<QBuffer> backing_buf;
-    std::unique_ptr<QByteArray> backing_mem;
-#endif
+    /// Scales fonts and margins with the window, so the layout looks the same at any size.
+    void ApplyScale();
+    /// Renders the art once for the current size: cropped to fill, softened and darkened, with a
+    /// margin for the pan.
+    void RebuildBackdrop();
+    /// Picks the art for art_program_id: banner, custom artwork, cover, else the game's icon.
+    void LoadArt();
+    void PaintBackdrop(QWidget* target);
+
     std::unique_ptr<Ui::LoadingScreen> ui;
     std::size_t previous_total = 0;
+    std::size_t current_value = 0;
     VideoCore::LoadCallbackStage previous_stage;
 
     QGraphicsOpacityEffect* opacity_effect = nullptr;
@@ -93,9 +115,18 @@ private:
     ControllerNavigation* controller_navigation = nullptr;
     std::unique_ptr<QPropertyAnimation> fadeout_animation;
 
-    // Definitions for the differences in text and styling for each stage
-    ::Common::unordered_map<VideoCore::LoadCallbackStage, const char*> progressbar_style;
-    ::Common::unordered_map<VideoCore::LoadCallbackStage, QString> stage_translations;
+    u64 details_program_id = 0;
+    QString details_title;
+    QString details_developer;
+    QString details_version;
+
+    u64 art_program_id = 0;
+    std::vector<u8> fallback_icon;
+    QImage art;
+    QPixmap backdrop;
+    /// Drives the pan and the moving segment of the progress line while nothing is counted.
+    QTimer frame_timer;
+    QElapsedTimer clock;
 
     // newly generated shaders are added to the end of the file, so when loading and compiling
     // shaders, it will start quickly but end slow if new shaders were added since previous launch.

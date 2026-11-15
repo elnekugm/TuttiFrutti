@@ -230,6 +230,8 @@ add_executable(lichii
     util/util.h
     util/icon_search.cpp
     util/icon_search.h
+    util/cover_art.cpp
+    util/cover_art.h
 
     user_data_migration.h user_data_migration.cpp
 

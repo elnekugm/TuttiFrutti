@@ -61,6 +61,7 @@
 #include "lichii/main_window.h"
 #include "lichii/shader_warm_dialog.h"
 #include "lichii/util/controller_navigation.h"
+#include "lichii/util/cover_art.h"
 #include "lichii/util/icon_search.h"
 #include "lichii/util/util.h"
 
@@ -397,6 +398,7 @@ void GameList::OnPopulatingCompleted(const QStringList& watch_list) {
 
     emit PopulatingCompleted();
     QueueArtworkLookups();
+    QueueCoverDownloads();
 }
 
 QString GameList::GameTitle(u64 program_id) const {
@@ -685,7 +687,7 @@ void GameList::StartArtworkLookups() {
 void GameList::ShowCustomArtwork(u64 program_id) {
     // Updates the shown pictures in place. A rescan here would stop and wait for a scan that is
     // still running on the UI thread, and rebuild the whole library for one picture.
-    const std::vector<u8> artwork = QtCommon::Game::ReadCustomArtwork(program_id);
+    const std::vector<u8> artwork = QtCommon::Game::ReadLibraryArtwork(program_id);
     if (artwork.empty()) {
         return;
     }
@@ -703,6 +705,92 @@ void GameList::ShowCustomArtwork(u64 program_id) {
         }
     };
     visit(item_model->invisibleRootItem());
+}
+
+void GameList::QueueCoverDownloads() {
+    if (!UISettings::values.download_cover_art.GetValue()) {
+        return;
+    }
+    const std::function<void(const QStandardItem*)> visit = [&](const QStandardItem* parent) {
+        for (int row = 0; row < parent->rowCount(); ++row) {
+            const QStandardItem* item = parent->child(row);
+            if (item->data(GameListItem::TypeRole).value<GameListItemType>() ==
+                GameListItemType::Game) {
+                QueueCoverDownload(item->data(GameListItemPath::ProgramIdRole).toULongLong(),
+                                   item->data(GameListItemPath::TitleRole).toString(), false);
+            } else {
+                visit(item);
+            }
+        }
+    };
+    visit(item_model->invisibleRootItem());
+}
+
+void GameList::QueueCoverDownload(u64 program_id, const QString& title, bool forced) {
+    if (program_id == 0) {
+        return;
+    }
+    // A game with a cover, or one the service has none for, is not asked again unless the user
+    // asks for it.
+    if (!forced && (cover_attempted.contains(program_id) || CoverArt::IsSettled(program_id))) {
+        cover_attempted.insert(program_id);
+        return;
+    }
+    cover_attempted.insert(program_id);
+    for (const auto& queued : cover_queue) {
+        if (queued.program_id == program_id) {
+            return;
+        }
+    }
+    // A download the user asked for goes ahead of the library's.
+    if (forced) {
+        cover_queue.prepend({program_id, title.trimmed()});
+    } else {
+        cover_queue.append({program_id, title.trimmed()});
+    }
+    StartCoverDownloads();
+}
+
+void GameList::StartCoverDownloads() {
+    while (cover_running < MaxParallelLookups && !cover_queue.isEmpty()) {
+        const CoverDownload download = cover_queue.takeFirst();
+        const u64 program_id = download.program_id;
+        ++cover_running;
+        auto* const watcher = new QFutureWatcher<CoverArt::Result>(this);
+        connect(watcher, &QFutureWatcher<CoverArt::Result>::finished, this,
+                [this, watcher, program_id] {
+                    watcher->deleteLater();
+                    --cover_running;
+                    const CoverArt::Result result = watcher->result();
+                    if (result.status == CoverArt::Status::Saved) {
+                        cover_network_failures = 0;
+                        LOG_INFO(Frontend, "Cover art saved for {:016X}", program_id);
+                        if (result.cover_saved) {
+                            // A scan running now can add the row with its old picture after
+                            // this, so it is shown again when the scan finishes.
+                            artwork_saved.insert(program_id);
+                            ShowCustomArtwork(program_id);
+                        }
+                    } else if (result.status == CoverArt::Status::NetworkError) {
+                        if (!cover_failure_logged) {
+                            cover_failure_logged = true;
+                            LOG_INFO(Frontend, "Cover art download for {:016X} failed: {}",
+                                     program_id, result.detail);
+                        }
+                        // The service is down or there is no connection: the rest would fail
+                        // the same way, so they wait for the next launch.
+                        if (++cover_network_failures >= 3) {
+                            cover_queue.clear();
+                        }
+                    }
+                    StartCoverDownloads();
+                });
+        watcher->setFuture(
+            QtConcurrent::run(&artwork_pool, [program_id, title = download.title.toStdString(),
+                                              cancel = artwork_cancel] {
+                return CoverArt::Download(program_id, title, *cancel);
+            }));
+    }
 }
 
 void GameList::SetGameTitle(u64 program_id, const QString& title) {
@@ -987,6 +1075,8 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
         edit_nup = context_menu.addAction(tr("Edit NUP Metadata..."));
         edit_nup->setEnabled(!nup_conversion_running);
     }
+    QAction* download_cover = context_menu.addAction(tr("Download Cover Art"));
+    download_cover->setVisible(program_id != 0);
     QAction* lookup_artwork = context_menu.addAction(tr("Look up artwork on SteamGridDB"));
     lookup_artwork->setVisible(program_id != 0);
     lookup_artwork->setEnabled(!UISettings::values.steamgriddb_api_key.GetValue().empty());
@@ -1147,6 +1237,8 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
 #endif
     connect(properties, &QAction::triggered, this,
             [this, path]() { emit OpenPerGameGeneralRequested(path); });
+    connect(download_cover, &QAction::triggered, this,
+            [this, program_id] { QueueCoverDownload(program_id, GameTitle(program_id), true); });
     connect(lookup_artwork, &QAction::triggered, this, [this, program_id] {
         QueueArtworkLookup(program_id, GameTitle(program_id), true);
     });

@@ -7,6 +7,7 @@
 #include <memory>
 #include <thread>
 
+#include <QCheckBox>
 #include "common/settings.h"
 #include "common/settings_enums.h"
 #include "core/core.h"
@@ -15,10 +16,6 @@
 #include "core/hle/service/sm/sm.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
-#include "qt_common/qt_compat.h"
-#include "ui_configure_input.h"
-#include "ui_configure_input_advanced.h"
-#include "ui_configure_input_player.h"
 #include "lichii/configuration/configure_camera.h"
 #include "lichii/configuration/configure_debug_controller.h"
 #include "lichii/configuration/configure_input.h"
@@ -30,6 +27,11 @@
 #include "lichii/configuration/configure_touchscreen_advanced.h"
 #include "lichii/configuration/configure_vibration.h"
 #include "lichii/configuration/input_profiles.h"
+#include "qt_common/config/uisettings.h"
+#include "qt_common/qt_compat.h"
+#include "ui_configure_input.h"
+#include "ui_configure_input_advanced.h"
+#include "ui_configure_input_player.h"
 
 namespace {
 template <typename Dialog, typename... Args>
@@ -177,6 +179,18 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
         CallConfigureDialog<ConfigureMotionTouch>(*this, input_subsystem);
     });
 
+    // Player 1 uses a connected Xbox, PlayStation or other gamepad while it is on the keyboard.
+    if (auto_gamepad_checkbox == nullptr) {
+        auto_gamepad_checkbox = new QCheckBox(tr("Use a connected controller automatically"), this);
+        auto_gamepad_checkbox->setToolTip(
+            tr("When a controller such as an Xbox or PlayStation controller is connected and "
+               "player 1 is set to the keyboard, player 1 uses the controller with its standard "
+               "layout, and goes back to the keyboard when it is unplugged. A mapping you set up "
+               "yourself is never changed."));
+        ui->verticalLayout_5->insertWidget(ui->verticalLayout_5->count() - 1,
+                                           auto_gamepad_checkbox);
+    }
+
     connect(ui->buttonClearAll, &QPushButton::clicked, [this] { ClearAll(); });
     connect(ui->buttonRestoreDefaults, &QPushButton::clicked, [this] { RestoreDefaults(); });
 
@@ -230,6 +244,9 @@ void ConfigureInput::ApplyConfiguration() {
     OnDockedModeChanged(pre_docked_mode, docked_mode_selected, system);
 
     Settings::values.vibration_enabled.SetValue(ui->vibrationGroup->isChecked());
+    if (auto_gamepad_checkbox != nullptr) {
+        UISettings::values.auto_use_gamepad = auto_gamepad_checkbox->isChecked();
+    }
     Settings::values.motion_enabled.SetValue(ui->motionGroup->isChecked());
     Settings::values.players.SetGlobal(was_global);
 }
@@ -259,6 +276,9 @@ void ConfigureInput::LoadConfiguration() {
     UpdateDockedState(handheld->IsConnected());
 
     ui->vibrationGroup->setChecked(Settings::values.vibration_enabled.GetValue());
+    if (auto_gamepad_checkbox != nullptr) {
+        auto_gamepad_checkbox->setChecked(UISettings::values.auto_use_gamepad.GetValue());
+    }
     ui->motionGroup->setChecked(Settings::values.motion_enabled.GetValue());
 }
 

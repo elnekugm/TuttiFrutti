@@ -131,6 +131,17 @@ ConfigureUi::ConfigureUi(Core::System& system_, QWidget* parent)
         ui->GeneralVerticalLayout->addLayout(key_layout);
     }
 
+    // Cover and banner art for every game in the library, by title ID only.
+    download_covers_checkbox =
+        new QCheckBox(tr("Download cover art for games in the library"), this);
+    download_covers_checkbox->setToolTip(
+        tr("Downloads each game's cover and banner. Switch games are looked up on api.nlib.cc by "
+           "title ID; Switch 2 games, and games nlib.cc does not have, by name in Nintendo's "
+           "eShop search. The cover replaces the game's small icon in the library unless you set "
+           "custom artwork, and the banner fills the loading screen. Right-click a game and "
+           "choose Download Cover Art to fetch one game again."));
+    ui->GeneralVerticalLayout->addWidget(download_covers_checkbox);
+
     InitializeLanguageComboBox();
 
     for (const auto& theme : UISettings::themes) {
@@ -198,6 +209,7 @@ void ConfigureUi::ApplyConfiguration() {
     UISettings::values.row_2_text_id = ui->row_2_text_combobox->currentData().toUInt();
     UISettings::values.steamgriddb_api_key =
         steamgriddb_key_edit->text().trimmed().toStdString();
+    UISettings::values.download_cover_art = download_covers_checkbox->isChecked();
 
     UISettings::values.enable_screenshot_save_as = ui->enable_screenshot_save_as->isChecked();
     Common::FS::SetEdenPath(Common::FS::EdenPath::ScreenshotsDir,
@@ -217,6 +229,7 @@ void ConfigureUi::RequestGameListUpdate() {
 void ConfigureUi::SetConfiguration() {
     steamgriddb_key_edit->setText(
         QString::fromStdString(UISettings::values.steamgriddb_api_key.GetValue()));
+    download_covers_checkbox->setChecked(UISettings::values.download_cover_art.GetValue());
     ui->theme_combobox->setCurrentIndex(
         ui->theme_combobox->findData(QString::fromStdString(UISettings::values.theme)));
     const QString language = QString::fromStdString(UISettings::values.language.GetValue());

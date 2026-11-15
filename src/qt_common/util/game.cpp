@@ -735,6 +735,47 @@ bool RemoveCustomArtwork(u64 program_id) {
     return RemoveCustomFile(CustomArtworkPath(program_id));
 }
 
+static std::filesystem::path CoverDir() {
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) / "game_covers";
+}
+
+std::filesystem::path DownloadedCoverPath(u64 program_id) {
+    return CoverDir() / fmt::format("{:016X}.jpg", program_id);
+}
+
+std::filesystem::path DownloadedBannerPath(u64 program_id) {
+    return CoverDir() / fmt::format("{:016X}_banner.jpg", program_id);
+}
+
+std::filesystem::path NoCoverMarkerPath(u64 program_id) {
+    return CoverDir() / fmt::format("{:016X}.none", program_id);
+}
+
+static std::vector<u8> ReadImageFile(const std::filesystem::path& path) {
+    constexpr qint64 MaxImageBytes = 16 * 1024 * 1024;
+    QFile file(QString::fromStdString(Common::FS::PathToUTF8String(path)));
+    if (!file.open(QIODevice::ReadOnly) || file.size() > MaxImageBytes) {
+        return {};
+    }
+    const QByteArray bytes = file.readAll();
+    return std::vector<u8>(bytes.begin(), bytes.end());
+}
+
+std::vector<u8> ReadDownloadedCover(u64 program_id) {
+    return program_id == 0 ? std::vector<u8>{} : ReadImageFile(DownloadedCoverPath(program_id));
+}
+
+std::vector<u8> ReadDownloadedBanner(u64 program_id) {
+    return program_id == 0 ? std::vector<u8>{} : ReadImageFile(DownloadedBannerPath(program_id));
+}
+
+std::vector<u8> ReadLibraryArtwork(u64 program_id) {
+    if (auto custom = ReadCustomArtwork(program_id); !custom.empty()) {
+        return custom;
+    }
+    return ReadDownloadedCover(program_id);
+}
+
 std::filesystem::path CustomTitlePath(u64 program_id) {
     return Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "names" /
            fmt::format("{:016X}.txt", program_id);
