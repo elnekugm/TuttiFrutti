@@ -9,6 +9,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 
 #include "common/common_types.h"
 
@@ -71,6 +72,22 @@ struct A64JitState {
     u64 host_stack_limit = 0;  // a call below this drops all frames
     u8 check_bit = 0;
 
+    // UserConfig::shared_code_cache: this Jit's own values of the pointers the shared code loads
+    // instead of embedding them (BlockOfCode::MovPerCore), by PerCoreSlot.
+    enum PerCoreSlot : size_t {
+        CallbacksSlot,
+        JitImplSlot,
+        UserConfigSlot,
+        TpidrEl0Slot,
+        TpidrroEl0Slot,
+        FastDispatchTableSlot,
+        ExclusiveAddressSlot,
+        ExclusiveValueSlot,
+        PerCoreSlotCount,
+    };
+    std::array<u64, PerCoreSlotCount> per_core{};
+    static constexpr u32 PerCoreOffset(PerCoreSlot slot);
+
     u32 GetPstate() const {
         return NZCV::FromX64(cpsr_nzcv);
     }
@@ -99,6 +116,10 @@ struct A64JitState {
 #ifdef _MSC_VER
 #    pragma warning(pop)
 #endif
+
+constexpr u32 A64JitState::PerCoreOffset(PerCoreSlot slot) {
+    return u32(offsetof(A64JitState, per_core) + slot * sizeof(u64));
+}
 
 using CodePtr = const void*;
 

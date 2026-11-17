@@ -1320,10 +1320,14 @@ void KProcess::InitializeInterfaces(KernelCore& kernel) {
     } else
 #endif
         if (this->Is64Bit()) {
+        const auto shared_code = this->IsApplication()
+                                     ? Core::ArmDynarmic64::MakeSharedCodeCache(kernel.System(),
+                                                                                kernel.IsMulticore())
+                                     : nullptr;
         for (size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {
             m_arm_interfaces[i] = std::make_unique<Core::ArmDynarmic64>(
                 kernel.System(), kernel.IsMulticore(), this,
-                static_cast<Core::DynarmicExclusiveMonitor&>(*m_exclusive_monitor), i);
+                static_cast<Core::DynarmicExclusiveMonitor&>(*m_exclusive_monitor), i, shared_code);
         }
     } else {
         for (size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {

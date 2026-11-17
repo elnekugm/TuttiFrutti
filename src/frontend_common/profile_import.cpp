@@ -57,6 +57,23 @@ void CheckLegacyProfileBeforeConfig() {
     }
 }
 
+bool NeedsPortableProfileImport() {
+#ifdef __ANDROID__
+    return false;
+#else
+    using namespace Common::FS;
+    if (!IsPortableMode()) {
+        return false;
+    }
+    // Once the user has imported, started fresh or postponed, the state is no longer Unresolved and
+    // the offer is not repeated.
+    if (Migration::GetState(ProfileImportStateDirectory()) != Migration::State::Unresolved) {
+        return false;
+    }
+    return fs::is_directory(GetLegacyPath(EmuPath::LichiiDataDir));
+#endif
+}
+
 fs::path RemapImportedPath(const fs::path& value, const fs::path& source,
                            const fs::path& destination) {
     if (value.empty() || !value.is_absolute()) {

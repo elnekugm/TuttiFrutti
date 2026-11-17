@@ -168,6 +168,7 @@ add_executable(tests
     video_core/ampere_tennis_tessellation.cpp
     video_core/pipeline_cache_files.cpp
     video_core/shader_cache_v2.cpp
+    video_core/shader_cache_v2_share.cpp
     video_core/evicted_pointer_slots.cpp
     video_core/shader_cache_v2_programs.cpp
     video_core/shader_cache_v2_driver.cpp
@@ -316,7 +317,7 @@ target_link_libraries(ncz_tests PRIVATE common OpenSSL::Crypto zstd::zstd
 add_test(NAME ncz_tests COMMAND ncz_tests)
 
 if (TARGET dynarmic::dynarmic)
-    target_sources(tests PRIVATE core/jit_codegen_options.cpp core/jit_ordered_loads.cpp core/window_trace.cpp)
+    target_sources(tests PRIVATE core/jit_codegen_options.cpp core/jit_ordered_loads.cpp core/jit_shared_code.cpp core/jit_warmup.cpp core/window_trace.cpp)
     target_link_libraries(tests PRIVATE dynarmic::dynarmic)
 endif()
 

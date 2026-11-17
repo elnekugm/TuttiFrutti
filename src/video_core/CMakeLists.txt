@@ -329,6 +329,8 @@ add_library(video_core STATIC
     shader_cache_v2/cache_file.h
     shader_cache_v2/cache_format.cpp
     shader_cache_v2/cache_format.h
+    shader_cache_v2/cache_share.cpp
+    shader_cache_v2/cache_share.h
     shader_cache_v2/cache_writer.cpp
     shader_cache_v2/cache_writer.h
     shader_cache_v2/driver_blobs.cpp

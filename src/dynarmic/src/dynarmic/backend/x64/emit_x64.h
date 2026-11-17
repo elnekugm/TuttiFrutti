@@ -12,6 +12,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -124,6 +126,8 @@ public:
 
     // Patching
     enum class PatchKind : u32 { Jg, Jz, Jmp, MovRcx };
+    /// Shared code: where a patch site's target field starts and its size (it is aligned to it).
+    static std::pair<size_t, size_t> PatchField(PatchKind kind);
     /// Places in emitted code that jump to a block (or load its entrypoint), patched when it is
     /// compiled or invalidated: each the place's offset in the code space times four plus its
     /// PatchKind, 0 when unused. Most blocks are linked from one or two places.
@@ -145,6 +149,11 @@ public:
     ExceptionHandler exception_handler;
     ::Common::unordered_map<IR::LocationDescriptor, BlockDescriptor> block_descriptors;
     ::Common::unordered_map<IR::LocationDescriptor, PatchInformation> patch_information;
+    /// Shared code: guards the fastmem tables against another Jit's thread in the fault handler.
+    mutable std::shared_mutex fastmem_mutex;
+    /// Shared code: recompiles a block once no Jit runs the code; the fault handler can't
+    /// invalidate it while other Jits may be in it.
+    std::function<void(IR::LocationDescriptor)> request_invalidation;
 
     // We need materialized protected members
     friend class A64EmitX64;

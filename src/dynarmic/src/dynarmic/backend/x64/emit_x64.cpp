@@ -8,7 +8,9 @@
 
 #include "dynarmic/backend/x64/emit_x64.h"
 
+#include <atomic>
 #include <iterator>
+#include <utility>
 
 #include "common/assert.h"
 #include <boost/variant/detail/apply_visitor_binary.hpp>
@@ -385,7 +387,29 @@ EmitX64::BlockDescriptor EmitX64::RegisterBlock(const IR::LocationDescriptor& de
     return block_desc;
 }
 
+std::pair<size_t, size_t> EmitX64::PatchField(PatchKind kind) {
+    switch (kind) {
+    case EmitX64::PatchKind::Jg:
+    case EmitX64::PatchKind::Jz:
+        return {2, 4};  // 0F 8x rel32
+    case EmitX64::PatchKind::Jmp:
+        return {1, 4};  // E9 rel32
+    case EmitX64::PatchKind::MovRcx:
+        return {2, 8};  // 48 B9 imm64
+    }
+    UNREACHABLE();
+}
+
 void EmitX64::AddPatchLocation(const IR::LocationDescriptor& target_desc, PatchKind kind) {
+    if (code.SharedCode()) {
+        // Other Jits may run the site while it is linked: its target field is aligned so that one
+        // atomic store rewrites it (PatchShared).
+        const auto [field, size] = PatchField(kind);
+        const size_t misalignment = (code.getCurr<uintptr_t>() + field) % size;
+        if (misalignment != 0) {
+            code.nop(size - misalignment);
+        }
+    }
     const size_t offset = code.getCurr<const u8*>() - static_cast<const u8*>(code.getCode());
     ASSERT(offset > 0 && offset < (size_t(1) << 30));
     const u32 entry = u32(offset << 2) | u32(kind);
@@ -405,6 +429,36 @@ void EmitX64::AddPatchLocation(const IR::LocationDescriptor& target_desc, PatchK
 void EmitX64::Patch(const IR::LocationDescriptor& target_desc, CodePtr target_code_ptr) {
     const auto it = patch_information.find(target_desc);
     if (it == patch_information.end()) {
+        return;
+    }
+    if (code.SharedCode() && target_code_ptr) {
+        // Linking while other Jits may run the sites: only each target field changes, at once.
+        const auto patch_shared = [&](u32 entry) {
+            const PatchKind kind = PatchKind(entry & 3);
+            u8* const site = const_cast<u8*>(static_cast<const u8*>(code.getCode())) + (entry >> 2);
+            const auto [field, size] = PatchField(kind);
+            u8* const target_field = site + field;
+            ASSERT(reinterpret_cast<uintptr_t>(target_field) % size == 0);
+            if (kind == PatchKind::MovRcx) {
+                ASSERT(site[0] == 0x48 && site[1] == 0xB9);
+                std::atomic_ref<u64>{*reinterpret_cast<u64*>(target_field)}.store(u64(target_code_ptr), std::memory_order_release);
+                return;
+            }
+            ASSERT(kind == PatchKind::Jmp ? site[0] == 0xE9 : site[0] == 0x0F);
+            const s64 rel = static_cast<const u8*>(target_code_ptr) - (target_field + 4);
+            ASSERT(rel >= INT32_MIN && rel <= INT32_MAX);
+            std::atomic_ref<u32>{*reinterpret_cast<u32*>(target_field)}.store(u32(s32(rel)), std::memory_order_release);
+        };
+        for (const u32 entry : it->second.first) {
+            if (entry != 0) {
+                patch_shared(entry);
+            }
+        }
+        if (it->second.rest) {
+            for (const u32 entry : *it->second.rest) {
+                patch_shared(entry);
+            }
+        }
         return;
     }
     const CodePtr save_code_ptr = code.getCurr();

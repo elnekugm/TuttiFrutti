@@ -409,6 +409,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Output binaries to bin/
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 
+# Portable profile. An empty "user" directory beside the executable makes the emulator keep its
+# config, logs and cache next to it instead of in the per-user data directory, because the portable
+# directory always takes priority (see PORTABLE_DIR in src/common/fs/fs_paths.h). Creating it in the
+# output directory means a local build, and any release archive that ships bin/, is portable as-is.
+file(MAKE_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/user")
+
 # System imported libraries
 # =======================================================================
 

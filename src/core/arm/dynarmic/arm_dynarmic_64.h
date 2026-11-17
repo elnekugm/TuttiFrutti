@@ -59,6 +59,7 @@ public:
     void AddTicks(u64 ticks) override;
     u64 GetTicksRemaining() override;
     u64 GetCNTPCT() override;
+    void BlockCompiled(u64 location) override;
     bool CheckMemoryAccess(u64 addr, u64 size, Kernel::DebugWatchpointType type);
     void ReturnException(u64 pc, Dynarmic::HaltReason hr);
 
@@ -80,8 +81,15 @@ public:
 class ArmDynarmic64 final : public ArmInterface {
 public:
     ArmDynarmic64(System& system, bool uses_wall_clock, Kernel::KProcess* process,
-                  DynarmicExclusiveMonitor& exclusive_monitor, std::size_t core_index);
+                  DynarmicExclusiveMonitor& exclusive_monitor, std::size_t core_index,
+                  std::shared_ptr<Dynarmic::A64::SharedCodeCache> shared_code = nullptr);
     ~ArmDynarmic64() override;
+
+    /// One compiled-code cache for all of a process's cores (Dynarmic::A64::SharedCodeCache), or
+    /// nullptr where they keep one each: off with EDEN_NX2_SHARED_JIT=0, a single core, the
+    /// debugger, or a host other than x86-64. EDEN_NX2_SHARED_JIT_VERIFY=1 checks every block.
+    static std::shared_ptr<Dynarmic::A64::SharedCodeCache> MakeSharedCodeCache(System& system,
+                                                                               bool multicore);
 
     Architecture GetArchitecture() const override {
         return Architecture::AArch64;
@@ -102,6 +110,10 @@ public:
     void ClearInstructionCache() override;
     void InvalidateCacheRange(u64 addr, std::size_t size) override;
 
+    bool SupportsJitWarmup() const override;
+    void SetJitWarmup(std::shared_ptr<JitWarmup> warmup) override;
+    bool WarmUp(const std::atomic<bool>& stop) override;
+
 protected:
     const Kernel::DebugWatchpoint* HaltedWatchpoint() const override;
     void RewindBreakpointInstruction() override;
@@ -114,10 +126,12 @@ private:
     friend class DynarmicCallbacks64;
 
     void MakeJit(Common::PageTable* page_table, std::size_t address_space_bits);
+    std::shared_ptr<Dynarmic::A64::SharedCodeCache> m_shared_code;
     std::optional<DynarmicCallbacks64> m_cb{};
     std::size_t m_core_index{};
 
     std::optional<Dynarmic::A64::Jit> m_jit{};
+    std::shared_ptr<JitWarmup> m_warmup;
 
     // SVC callback
     u32 m_svc{};

@@ -21,6 +21,39 @@
 namespace Dynarmic {
 namespace A64 {
 
+enum class PrecompileResult {
+    Compiled,   ///< Compiled now
+    Present,    ///< Already in the code cache
+    Unreadable, ///< Part of the block is not readable code: nothing was emitted
+    Full,       ///< Less code space left than asked to keep free: nothing was emitted
+};
+
+/// Lets the Jits of one process share their compiled code: a block one of them compiles, every
+/// one of them runs, instead of each compiling it into a cache of its own. Give each Jit the same
+/// one in UserConfig::shared_code_cache. The configs may differ only in callbacks, processor_id,
+/// tpidr_el0, tpidrro_el0 and counters, and must have compact_block_exits and no cycle counting;
+/// a Jit that can't share keeps a cache of its own (Jit::SharesCode). Clearing or invalidating
+/// the cache of one clears it for all, once none of them runs the code. x64 only; the other
+/// backends keep a cache per Jit.
+class SharedCodeCache final {
+public:
+    /// With verify, every block is checked for pointers of the Jit that compiled it, which the
+    /// shared code must load from the running Jit instead (VerifyFailures counts the ones found).
+    explicit SharedCodeCache(bool verify = false);
+    ~SharedCodeCache();
+
+    SharedCodeCache(const SharedCodeCache&) = delete;
+    SharedCodeCache& operator=(const SharedCodeCache&) = delete;
+
+    /// Blocks found holding another Jit's pointer, with verify.
+    std::size_t VerifyFailures() const;
+    /// Whole-cache clears so far.
+    std::size_t Clears() const;
+
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
+
 class Jit final {
 public:
     explicit Jit(UserConfig conf);
@@ -50,6 +83,22 @@ public:
      * @param length The length (in bytes) of the range to invalidate.
      */
     void InvalidateCacheRange(std::uint64_t start_address, std::size_t length);
+
+    /**
+     * Compiles the block at location (an IR::LocationDescriptor value) as if execution had
+     * reached it, without running anything. Leaves the guest state alone.
+     * Only from the thread that calls Run, while Run is not executing.
+     * Pending ClearCache and InvalidateCacheRange requests stay pending: the next Run applies them
+     * to the blocks compiled here as well. Never clears the cache to make room.
+     * @param keep_free Code space (bytes) to leave free: Full when the block could not.
+     */
+    PrecompileResult Precompile(std::uint64_t location, std::size_t keep_free);
+
+    /// Bytes of the code cache in use.
+    std::size_t CodeCacheUsed() const;
+
+    /// Whether this Jit runs the code of a SharedCodeCache.
+    bool SharesCode() const;
 
     /**
      * Reset CPU state to state at startup. Does not clear code cache.
@@ -126,8 +175,10 @@ public:
     /// the resulting instructions as a vector of their string representations.
     std::string Disassemble() const;
 
-private:
+    /// Backend state (SharedCodeCache keeps a list of the Jits sharing its code).
     struct Impl;
+
+private:
     std::unique_ptr<Impl> impl;
 };
 

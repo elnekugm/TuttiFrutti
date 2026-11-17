@@ -33,6 +33,14 @@
 UserDataMigrator::UserDataMigrator(QMainWindow* main_window) {
     // NOTE: Logging is not initialized yet, do not produce logs here.
 
+    // A portable build never offers the other emulators' profiles (the "user" directory takes
+    // priority, see NeedsLegacyProfileImport), but it does offer to bring a previous, non-portable
+    // Lichii profile into that directory so a portable build does not look empty on first run.
+    if (Common::FS::IsPortableMode() && FrontendCommon::NeedsPortableProfileImport()) {
+        ShowPortableImportPrompt(main_window);
+        return;
+    }
+
     if (FrontendCommon::NeedsLegacyProfileImport()) {
         namespace Migration = Common::FS::ProfileMigration;
         const auto state_dir = FrontendCommon::ProfileImportStateDirectory();
@@ -49,6 +57,45 @@ UserDataMigrator::UserDataMigrator(QMainWindow* main_window) {
             Migration::Recover(state_dir);
         }
         ShowMigrationPrompt(main_window);
+    }
+}
+
+void UserDataMigrator::ShowPortableImportPrompt(QMainWindow* main_window) {
+    using namespace Common::FS;
+
+    const auto source = GetLegacyPath(EmuPath::LichiiDataDir);
+
+    QMessageBox prompt(main_window);
+    prompt.setIcon(QMessageBox::Question);
+    prompt.setWindowTitle(QObject::tr("Portable profile"));
+    prompt.setText(
+        QObject::tr("This build is portable: it keeps its data in the \"user\" folder beside the "
+                    "program.\n\nAn existing Lichii profile was found at:\n%1\n\nCopy its saves, "
+                    "settings and keys into the portable folder? The original profile is left "
+                    "unchanged.")
+            .arg(QString::fromStdString(PathToUTF8String(source))));
+    auto* import = prompt.addButton(QObject::tr("Import"), QMessageBox::AcceptRole);
+    auto* fresh = prompt.addButton(QObject::tr("Start fresh"), QMessageBox::RejectRole);
+    prompt.setDefaultButton(import);
+    prompt.exec();
+
+    if (prompt.clickedButton() == fresh) {
+        Common::FS::ProfileMigration::MarkFresh(FrontendCommon::ProfileImportStateDirectory());
+        return;
+    }
+    if (prompt.clickedButton() != import) {
+        // Closed without choosing: ask again on the next launch, like the other import prompt.
+        throw std::runtime_error(
+            "Portable profile import was postponed. Relaunch Lichii to choose a profile.");
+    }
+
+    // Reuse the import machinery: copy from the non-portable profile into the portable directory,
+    // keeping the compiled shader cache and leaving the source untouched.
+    selected_emu = lichii_data_source;
+    MigrateUserData(main_window, /*clear_shader_cache=*/false,
+                    MigrationWorker::MigrationStrategy::Copy);
+    if (!migrated) {
+        throw std::runtime_error("Import failed. Relaunch Lichii to retry or recover.");
     }
 }
 

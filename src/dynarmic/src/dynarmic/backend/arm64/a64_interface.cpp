@@ -222,6 +222,15 @@ void Jit::InvalidateCacheRange(std::uint64_t start_address, std::size_t length) 
     impl->InvalidateCacheRange(start_address, length);
 }
 
+PrecompileResult Jit::Precompile(std::uint64_t, std::size_t) {
+    // Not implemented on this backend: nothing is compiled ahead.
+    return PrecompileResult::Full;
+}
+
+std::size_t Jit::CodeCacheUsed() const {
+    return 0;
+}
+
 void Jit::Reset() {
     impl->Reset();
 }
@@ -321,6 +330,26 @@ bool Jit::IsExecuting() const {
 
 std::string Jit::Disassemble() const {
     return impl->Disassemble();
+}
+
+// SharedCodeCache: only the x64 backend shares code; here each Jit keeps a cache of its own.
+struct SharedCodeCache::Impl {};
+
+SharedCodeCache::SharedCodeCache(bool)
+        : impl(std::make_unique<Impl>()) {}
+
+SharedCodeCache::~SharedCodeCache() = default;
+
+std::size_t SharedCodeCache::VerifyFailures() const {
+    return 0;
+}
+
+std::size_t SharedCodeCache::Clears() const {
+    return 0;
+}
+
+bool Jit::SharesCode() const {
+    return false;
 }
 
 }  // namespace Dynarmic::A64

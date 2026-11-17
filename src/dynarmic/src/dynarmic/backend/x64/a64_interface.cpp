@@ -6,12 +6,20 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <tuple>
+#include <vector>
 
 #include <boost/icl/interval_set.hpp>
 #include "common/assert.h"
+#include "common/container/unordered_set.h"
 #include "dynarmic/common/fp/fpcr.h"
 #include "dynarmic/common/llvm_disassemble.h"
 #include <bit>
@@ -20,6 +28,7 @@
 #include "dynarmic/backend/x64/a64_jitstate.h"
 #include "dynarmic/backend/x64/block_of_code.h"
 #include "dynarmic/backend/x64/devirtualize.h"
+#include "dynarmic/backend/x64/exclusive_monitor_friend.h"
 #include "dynarmic/backend/x64/jitstate_info.h"
 #include "dynarmic/common/atomic.h"
 #include "dynarmic/frontend/A64/translate/a64_translate.h"
@@ -77,22 +86,117 @@ static Optimization::PolyfillOptions GenPolyfillOptions(const BlockOfCode& code)
     };
 }
 
+/// The code, emitter and state of a SharedCodeCache, made by the first Jit that joins it.
+struct SharedCodeCache::Impl {
+    explicit Impl(bool verify)
+        : verify(verify) {}
+
+    const bool verify;
+
+    // Made by the first Jit (Jit::Impl::JoinShared), whose config builds the code.
+    std::optional<UserConfig> conf;
+    std::unique_ptr<BlockOfCode> code;
+    std::unique_ptr<A64EmitX64> emitter;
+    Optimization::PolyfillOptions polyfill_options{};
+    std::vector<u64> founder_values;  ///< The founding Jit's per-core pointers, for verify
+
+    /// Taken to compile into the code, and by an invalidation (after `mutex`).
+    std::mutex compile_mutex;
+
+    /// The code is only cleared or invalidated while no Jit runs it (inside == 0).
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<Jit::Impl*> members;
+    size_t inside = 0;
+    bool pending = false;
+    bool clear_all = false;
+    boost::icl::interval_set<u64> ranges;
+    ::Common::unordered_set<IR::LocationDescriptor> blocks;
+    /// Bumped by each invalidation: a Jit drops its RSB and fast dispatch entries when it sees it.
+    u64 epoch = 0;
+
+    std::atomic<size_t> verify_failures{0};
+    std::atomic<size_t> clears{0};
+};
+
+SharedCodeCache::SharedCodeCache(bool verify)
+        : impl(std::make_unique<Impl>(verify)) {}
+
+SharedCodeCache::~SharedCodeCache() = default;
+
+std::size_t SharedCodeCache::VerifyFailures() const {
+    return impl->verify_failures.load(std::memory_order_relaxed);
+}
+
+std::size_t SharedCodeCache::Clears() const {
+    return impl->clears.load(std::memory_order_relaxed);
+}
+
+namespace {
+
+/// What of a config shapes the code: Jits whose configs differ in anything else can't share it.
+auto SharedCodeKey(const UserConfig& c) {
+    return std::make_tuple(
+        c.fastmem_pointer, c.global_monitor, c.tpidrro_el0 != nullptr, c.tpidr_el0 != nullptr, c.page_table,
+        c.optimizations, c.page_table_address_space_bits, c.page_table_pointer_mask, c.page_table_log2_stride,
+        c.page_table_marked_bit, c.page_table_sign_extension, c.cntfrq_el0, c.ctr_el0, c.dczid_el0,
+        c.fastmem_address_space_bits, c.code_cache_size, c.detect_misaligned_access_via_page_table,
+        c.unsafe_optimizations, c.hook_data_cache_operations, c.hook_isb, c.hook_hint_instructions,
+        c.silently_mirror_page_table, c.absolute_offset_page_table,
+        c.only_detect_misalignment_via_page_table_on_page_boundary, c.recompile_on_fastmem_failure,
+        c.silently_mirror_fastmem, c.fastmem_exclusive_access, c.recompile_on_exclusive_fastmem_failure,
+        c.spill_to_free_gpr, c.scratch_copy_to_free_reg, c.fold_address_offsets, c.elide_redundant_zext,
+        c.omit_block_frame, c.halt_check_on_back_edges, c.rsb_size, c.compact_block_exits, c.far_code,
+        c.fast_dispatch_table_bits, c.fast_dispatch_set_associative, c.reuse_host_flags, c.host_call_return,
+        c.define_unpredictable_behaviour, c.wall_clock_cntpct, c.check_halt_on_memory_access,
+        c.enable_cycle_counting, c.very_verbose_debugging_output);
+}
+
+/// Whether code built from this config can run on several Jits at once. Patches rewrite only the
+/// rel32 of compact exits; cycle counting calls back into one Jit's tick counters.
+bool CanShareCode([[maybe_unused]] const UserConfig& conf) {
+#ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
+    return false;
+#else
+    return conf.shared_code_cache && conf.compact_block_exits && !conf.enable_cycle_counting &&
+           conf.callbacks != nullptr;
+#endif
+}
+
+}  // namespace
+
 struct Jit::Impl final {
 public:
-    Impl(Jit* jit, UserConfig conf)
-        : conf(conf)
-        , block_of_code(GenRunCodeCallbacks(conf.callbacks, &GetCurrentBlockThunk, this, conf), JitStateInfo{jit_state, RsbPtrMask(conf)}, conf.code_cache_size, GenRCP(conf))
-        , emitter(block_of_code, conf, jit)
-        , polyfill_options(GenPolyfillOptions(block_of_code))
+    Impl(Jit* jit, UserConfig conf_)
+        : conf(conf_)
     {
         ASSERT(conf.page_table_address_space_bits >= 12 && conf.page_table_address_space_bits <= 64);
+        if (CanShareCode(conf)) {
+            JoinShared(jit);
+        }
+        if (!shared) {
+            own_code = std::make_unique<BlockOfCode>(GenRunCodeCallbacks(conf.callbacks, &GetCurrentBlockThunk, this, conf), JitStateInfo{jit_state, RsbPtrMask(conf)}, conf.code_cache_size, GenRCP(conf));
+            own_emitter = std::make_unique<A64EmitX64>(*own_code, conf, jit);
+            block_of_code = own_code.get();
+            emitter = own_emitter.get();
+            polyfill_options = GenPolyfillOptions(*own_code);
+        }
     }
 
-    ~Impl() = default;
+    ~Impl() {
+        if (shared) {
+            std::scoped_lock lock{shared->mutex};
+            std::erase(shared->members, this);
+        }
+    }
 
     HaltReason Run() {
         ASSERT(!is_executing);
-        PerformRequestedCacheInvalidation(static_cast<HaltReason>(Atomic::Load(&jit_state.halt_reason)));
+        if (shared) {
+            EnterShared();
+        } else {
+            PerformRequestedCacheInvalidation(static_cast<HaltReason>(Atomic::Load(&jit_state.halt_reason)));
+        }
         is_executing = true;
         // TODO: Check code alignment
         const CodePtr current_code_ptr = [this] {
@@ -104,39 +208,61 @@ public:
             }
             return CodePtr((uintptr_t(GetCurrentBlock()) + 15) & ~uintptr_t(15));
         }();
-        const HaltReason hr = block_of_code.RunCode(&jit_state, current_code_ptr);
-        PerformRequestedCacheInvalidation(hr);
+        const HaltReason hr = block_of_code->RunCode(&jit_state, current_code_ptr);
+        if (shared) {
+            LeaveShared();
+        } else {
+            PerformRequestedCacheInvalidation(hr);
+        }
         is_executing = false;
         return hr;
     }
 
     HaltReason Step() {
         ASSERT(!is_executing);
-        PerformRequestedCacheInvalidation(static_cast<HaltReason>(Atomic::Load(&jit_state.halt_reason)));
+        if (shared) {
+            EnterShared();
+        } else {
+            PerformRequestedCacheInvalidation(static_cast<HaltReason>(Atomic::Load(&jit_state.halt_reason)));
+        }
         is_executing = true;
-        const HaltReason hr = block_of_code.StepCode(&jit_state, GetCurrentSingleStep());
-        PerformRequestedCacheInvalidation(hr);
+        const HaltReason hr = block_of_code->StepCode(&jit_state, GetCurrentSingleStep());
+        if (shared) {
+            LeaveShared();
+        } else {
+            PerformRequestedCacheInvalidation(hr);
+        }
         is_executing = false;
         return hr;
     }
 
     void ClearCache() {
+        if (shared) {
+            RequestShared([](SharedCodeCache::Impl& s) { s.clear_all = true; });
+            return;
+        }
         std::unique_lock lock{invalidation_mutex};
         invalidate_entire_cache = true;
         HaltExecution(HaltReason::CacheInvalidation);
     }
 
     void InvalidateCacheRange(u64 start_address, size_t length) {
-        std::unique_lock lock{invalidation_mutex};
         const auto end_address = static_cast<u64>(start_address + length - 1);
         const auto range = boost::icl::discrete_interval<u64>::closed(start_address, end_address);
+        if (shared) {
+            RequestShared([&range](SharedCodeCache::Impl& s) { s.ranges.add(range); });
+            return;
+        }
+        std::unique_lock lock{invalidation_mutex};
         invalid_cache_ranges.add(range);
         HaltExecution(HaltReason::CacheInvalidation);
     }
 
     void Reset() {
         ASSERT(!is_executing);
+        const auto per_core = jit_state.per_core;
         jit_state = {};
+        jit_state.per_core = per_core;
     }
 
     void HaltExecution(HaltReason hr) {
@@ -237,9 +363,43 @@ public:
     }
 
     std::string Disassemble() const {
-        const size_t size = reinterpret_cast<const char*>(block_of_code.getCurr()) - reinterpret_cast<const char*>(block_of_code.GetCodeBegin());
-        auto const* p = reinterpret_cast<const char*>(block_of_code.GetCodeBegin());
+        const size_t size = reinterpret_cast<const char*>(block_of_code->getCurr()) - reinterpret_cast<const char*>(block_of_code->GetCodeBegin());
+        auto const* p = reinterpret_cast<const char*>(block_of_code->GetCodeBegin());
         return Common::DisassembleX64(p, p + size);
+    }
+
+    PrecompileResult Precompile(std::uint64_t location, std::size_t keep_free) {
+        ASSERT(!is_executing);
+        const IR::LocationDescriptor descriptor{location};
+        if (A64::LocationDescriptor{descriptor}.SingleStepping()) {
+            return PrecompileResult::Unreadable;
+        }
+        std::unique_lock compile_lock{CompileMutex(), std::defer_lock};
+        if (shared) {
+            compile_lock.lock();
+        }
+        if (emitter->GetBasicBlock(descriptor)) {
+            return PrecompileResult::Present;
+        }
+        // Unlike GetBlock, never clears the cache to make room. GetBlock assumes a block fits in
+        // MINIMUM_REMAINING_CODESIZE, so keep_free is left after this one.
+        if (block_of_code->SpaceRemaining() < MINIMUM_REMAINING_CODESIZE + keep_free) {
+            return PrecompileResult::Full;
+        }
+        block_of_code->EnsureMemoryCommitted(MINIMUM_REMAINING_CODESIZE);
+        if (!CompileBlock(descriptor, true)) {
+            return PrecompileResult::Unreadable;
+        }
+        ASSERT(block_of_code->SpaceRemaining() >= keep_free);
+        return PrecompileResult::Compiled;
+    }
+
+    size_t CodeCacheUsed() const {
+        return size_t(reinterpret_cast<const char*>(block_of_code->getCurr()) - reinterpret_cast<const char*>(block_of_code->GetCodeBegin()));
+    }
+
+    bool SharesCode() const {
+        return shared != nullptr;
     }
 
 private:
@@ -263,29 +423,59 @@ private:
         return GetBlock(A64::LocationDescriptor{GetCurrentLocation()}.SetSingleStepping(true));
     }
 
+    static constexpr size_t MINIMUM_REMAINING_CODESIZE = 1 * 1024 * 1024;
+
     CodePtr GetBlock(IR::LocationDescriptor descriptor) {
-        if (auto block = emitter.GetBasicBlock(descriptor))
+        if (shared) {
+            return GetSharedBlock(descriptor);
+        }
+        if (auto block = emitter->GetBasicBlock(descriptor))
             return block->entrypoint;
 
-        constexpr size_t MINIMUM_REMAINING_CODESIZE = 1 * 1024 * 1024;
-        if (block_of_code.SpaceRemaining() < MINIMUM_REMAINING_CODESIZE) {
+        if (block_of_code->SpaceRemaining() < MINIMUM_REMAINING_CODESIZE) {
             // Immediately evacuate cache
             invalidate_entire_cache = true;
             PerformRequestedCacheInvalidation(HaltReason::CacheInvalidation);
         }
-        block_of_code.EnsureMemoryCommitted(MINIMUM_REMAINING_CODESIZE);
+        block_of_code->EnsureMemoryCommitted(MINIMUM_REMAINING_CODESIZE);
 
         // JIT Compile
-        const auto get_code = [this](u64 vaddr) { return conf.callbacks->MemoryReadCode(vaddr); };
+        const CodePtr entrypoint = CompileBlock(descriptor, false);
+        conf.callbacks->BlockCompiled(descriptor.Value());
+        return entrypoint;
+    }
+
+    /// Translates, optimizes and emits the block. With skip_unreadable, returns nullptr and emits
+    /// nothing when an instruction of the block could not be read.
+    CodePtr CompileBlock(IR::LocationDescriptor descriptor, bool skip_unreadable) {
+        bool readable = true;
+        const auto get_code = [this, &readable](u64 vaddr) {
+            const std::optional<u32> instruction = conf.callbacks->MemoryReadCode(vaddr);
+            readable = readable && instruction.has_value();
+            return instruction;
+        };
         // LocationDescriptor ctor() does important ops (like tflags) do not skip
         auto const arch_descriptor = A64::LocationDescriptor{descriptor};
         ir_block.Reset(arch_descriptor);
         A64::Translate(ir_block, arch_descriptor, get_code, {conf.define_unpredictable_behaviour, conf.wall_clock_cntpct});
+        if (skip_unreadable && !readable) {
+            return nullptr;
+        }
         Optimization::Optimize(ir_block, conf, polyfill_options);
         if (conf.counters) {
             ++conf.counters->blocks_compiled;
         }
-        return emitter.Emit(ir_block).entrypoint;
+        if (shared && shared->verify) {
+            const u8* const near_begin = block_of_code->getCurr<const u8*>();
+            const u8* const far_begin = block_of_code->FarCodePtr();
+            const CodePtr entrypoint = emitter->Emit(ir_block).entrypoint;
+            VerifySharedCode(near_begin, block_of_code->getCurr<const u8*>());
+            if (far_begin) {
+                VerifySharedCode(far_begin, block_of_code->FarCodePtr());
+            }
+            return entrypoint;
+        }
+        return emitter->Emit(ir_block).entrypoint;
     }
 
     void PerformRequestedCacheInvalidation(HaltReason hr) {
@@ -303,26 +493,249 @@ private:
                 if (conf.counters) {
                     ++conf.counters->cache_clears;
                 }
-                block_of_code.ClearCache();
-                emitter.ClearCache();
+                block_of_code->ClearCache();
+                emitter->ClearCache();
             } else {
-                emitter.InvalidateCacheRanges(invalid_cache_ranges);
+                emitter->InvalidateCacheRanges(invalid_cache_ranges);
             }
             invalid_cache_ranges.clear();
             invalidate_entire_cache = false;
         }
     }
 
+    // ---- Shared code (UserConfig::shared_code_cache) ----
+
+    std::mutex& CompileMutex() {
+        return shared ? shared->compile_mutex : invalidation_mutex;
+    }
+
+    /// Makes the shared code from this Jit's config if it is the first to join, else checks that
+    /// its config can run that code. Leaves `shared` null when it can't.
+    void JoinShared(Jit* jit) {
+        SharedCodeCache::Impl& s = *conf.shared_code_cache->impl;
+        std::scoped_lock lock{s.compile_mutex, s.mutex};
+        if (!s.code) {
+            std::vector<PerCoreValue> values;
+            const auto add = [&values](u64 value, A64JitState::PerCoreSlot slot) {
+                if (value != 0) {
+                    values.push_back({value, A64JitState::PerCoreOffset(slot)});
+                }
+            };
+            add(u64(conf.callbacks), A64JitState::CallbacksSlot);
+            add(u64(this), A64JitState::JitImplSlot);
+            add(u64(conf.tpidr_el0), A64JitState::TpidrEl0Slot);
+            add(u64(conf.tpidrro_el0), A64JitState::TpidrroEl0Slot);
+            if (conf.global_monitor) {
+                add(u64(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)), A64JitState::ExclusiveAddressSlot);
+                add(u64(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)), A64JitState::ExclusiveValueSlot);
+            }
+            s.conf = conf;
+            s.conf->shared_code_cache.reset();  // the cache holds its own config: no cycle
+            s.code = std::make_unique<BlockOfCode>(GenRunCodeCallbacks(conf.callbacks, &GetCurrentBlockThunk, this, *s.conf), JitStateInfo{jit_state, RsbPtrMask(conf)}, conf.code_cache_size, GenRCP(*s.conf), true, std::move(values));
+            s.emitter = std::make_unique<A64EmitX64>(*s.code, *s.conf, jit);
+            s.polyfill_options = GenPolyfillOptions(*s.code);
+            // The exclusive monitor clear embeds every processor's address slot, the founder's too.
+            const u32 exclusive_address = A64JitState::PerCoreOffset(A64JitState::ExclusiveAddressSlot);
+            for (const PerCoreValue& value : s.code->PerCoreValues()) {
+                if (value.offset != exclusive_address) {
+                    s.founder_values.push_back(value.value);
+                }
+            }
+            SharedCodeCache::Impl* const s_ptr = &s;
+            s.emitter->request_invalidation = [s_ptr](IR::LocationDescriptor location) {
+                RequestShared(*s_ptr, [location](SharedCodeCache::Impl& c) { c.blocks.insert(location); });
+            };
+        } else if (SharedCodeKey(*s.conf) != SharedCodeKey(conf)) {
+            return;
+        }
+        shared = &s;
+        block_of_code = s.code.get();
+        emitter = s.emitter.get();
+        polyfill_options = s.polyfill_options;
+
+        if (conf.HasOptimization(OptimizationFlag::FastDispatch)) {
+            fast_dispatch_table.resize(emitter->fast_dispatch_table.size());
+        }
+        const auto set = [this](A64JitState::PerCoreSlot slot, u64 value) {
+            jit_state.per_core[slot] = value;
+        };
+        set(A64JitState::CallbacksSlot, u64(conf.callbacks));
+        set(A64JitState::JitImplSlot, u64(this));
+        set(A64JitState::UserConfigSlot, u64(&conf));
+        set(A64JitState::TpidrEl0Slot, u64(conf.tpidr_el0));
+        set(A64JitState::TpidrroEl0Slot, u64(conf.tpidrro_el0));
+        set(A64JitState::FastDispatchTableSlot, u64(fast_dispatch_table.data()));
+        if (conf.global_monitor) {
+            set(A64JitState::ExclusiveAddressSlot, u64(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
+            set(A64JitState::ExclusiveValueSlot, u64(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
+        }
+        s.members.push_back(this);
+        seen_epoch = s.epoch;
+    }
+
+    /// Records a change to the shared code and halts every Jit; it is made once none runs the code.
+    template<typename Change>
+    static void RequestShared(SharedCodeCache::Impl& s, Change&& change) {
+        std::unique_lock lock{s.mutex};
+        change(s);
+        s.pending = true;
+        for (Jit::Impl* const member : s.members) {
+            member->HaltExecution(HaltReason::CacheInvalidation);
+        }
+        if (s.inside == 0) {
+            PerformShared(s);
+        }
+    }
+
+    template<typename Change>
+    void RequestShared(Change&& change) {
+        RequestShared(*shared, std::forward<Change>(change));
+    }
+
+    /// Under s.mutex, with no Jit in the code.
+    static void PerformShared(SharedCodeCache::Impl& s) {
+        ASSERT(s.inside == 0);
+        std::scoped_lock compile_lock{s.compile_mutex};
+        if (s.clear_all) {
+            s.clears.fetch_add(1, std::memory_order_relaxed);
+            s.code->ClearCache();
+            s.emitter->ClearCache();
+        } else {
+            if (!s.ranges.empty()) {
+                s.emitter->InvalidateCacheRanges(s.ranges);
+            }
+            if (!s.blocks.empty()) {
+                s.emitter->InvalidateBasicBlocks(s.blocks);
+            }
+        }
+        s.clear_all = false;
+        s.ranges.clear();
+        s.blocks.clear();
+        s.pending = false;
+        ++s.epoch;
+        s.cv.notify_all();
+    }
+
+    /// Before running the code: waits out a pending change, then drops what this Jit kept of the
+    /// code from before the last one (its RSB and fast dispatch entries).
+    void EnterShared() {
+        std::unique_lock lock{shared->mutex};
+        ClearHalt(HaltReason::CacheInvalidation);
+        while (shared->pending) {
+            if (shared->inside == 0) {
+                PerformShared(*shared);
+            } else {
+                shared->cv.wait(lock);
+            }
+        }
+        ++shared->inside;
+        SyncSharedEpoch();
+    }
+
+    /// Every guest SVC leaves the code (tens of thousands a second per core): no wake-up unless a
+    /// change is made, which PerformShared announces itself.
+    void LeaveShared() {
+        std::unique_lock lock{shared->mutex};
+        --shared->inside;
+        if (shared->pending && shared->inside == 0) {
+            PerformShared(*shared);
+        }
+    }
+
+    /// The shared code is full: clears it, waiting for the other Jits to leave it. This Jit keeps
+    /// no pointer into the code meanwhile (the dispatcher dropped its host call frames before the
+    /// lookup), so it counts as outside while it waits.
+    void ClearSharedFromInside() {
+        std::unique_lock lock{shared->mutex};
+        shared->clear_all = true;
+        shared->pending = true;
+        for (Jit::Impl* const member : shared->members) {
+            member->HaltExecution(HaltReason::CacheInvalidation);
+        }
+        --shared->inside;
+        while (shared->pending) {
+            if (shared->inside == 0) {
+                PerformShared(*shared);
+            } else {
+                shared->cv.notify_all();
+                shared->cv.wait(lock);
+            }
+        }
+        ++shared->inside;
+        ClearHalt(HaltReason::CacheInvalidation);
+        SyncSharedEpoch();
+        if (conf.counters) {
+            ++conf.counters->cache_clears;
+        }
+    }
+
+    /// Under shared->mutex.
+    void SyncSharedEpoch() {
+        if (seen_epoch == shared->epoch) {
+            return;
+        }
+        seen_epoch = shared->epoch;
+        jit_state.ResetRSB();
+        std::fill(fast_dispatch_table.begin(), fast_dispatch_table.end(), A64EmitX64::FastDispatchEntry{});
+    }
+
+    CodePtr GetSharedBlock(IR::LocationDescriptor descriptor) {
+        CodePtr entrypoint;
+        {
+            std::unique_lock compile_lock{shared->compile_mutex};
+            // Cleared at most once, like the private cache: after that the block is compiled anyway.
+            bool cleared = false;
+            while (true) {
+                if (auto block = emitter->GetBasicBlock(descriptor)) {
+                    return block->entrypoint;
+                }
+                if (cleared || block_of_code->SpaceRemaining() >= MINIMUM_REMAINING_CODESIZE) {
+                    break;
+                }
+                compile_lock.unlock();
+                ClearSharedFromInside();
+                compile_lock.lock();
+                cleared = true;
+            }
+            block_of_code->EnsureMemoryCommitted(MINIMUM_REMAINING_CODESIZE);
+            entrypoint = CompileBlock(descriptor, false);
+        }
+        conf.callbacks->BlockCompiled(descriptor.Value());
+        return entrypoint;
+    }
+
+    /// Verify: a pointer of the Jit that built the shared code, embedded in a block, would be used
+    /// by every Jit that runs it.
+    void VerifySharedCode(const u8* begin, const u8* end) {
+        if (end <= begin) {
+            return;
+        }
+        for (const u64 value : shared->founder_values) {
+            u8 bytes[sizeof(u64)];
+            std::memcpy(bytes, &value, sizeof(value));
+            if (std::search(begin, end, std::begin(bytes), std::end(bytes)) != end) {
+                shared->verify_failures.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+        }
+    }
+
     IR::Block ir_block = {LocationDescriptor(0, FP::FPCR(0), false)};
     const UserConfig conf;
     A64JitState jit_state;
-    BlockOfCode block_of_code;
-    A64EmitX64 emitter;
-    Optimization::PolyfillOptions polyfill_options;
+    std::unique_ptr<BlockOfCode> own_code;
+    std::unique_ptr<A64EmitX64> own_emitter;
+    BlockOfCode* block_of_code = nullptr;
+    A64EmitX64* emitter = nullptr;
+    Optimization::PolyfillOptions polyfill_options{};
     bool is_executing = false;
     bool invalidate_entire_cache = false;
     boost::icl::interval_set<u64> invalid_cache_ranges;
     std::mutex invalidation_mutex;
+
+    SharedCodeCache::Impl* shared = nullptr;
+    std::vector<A64EmitX64::FastDispatchEntry> fast_dispatch_table;  ///< Shared code: this Jit's
+    u64 seen_epoch = 0;
 };
 
 Jit::Jit(UserConfig conf)
@@ -344,6 +757,18 @@ void Jit::ClearCache() {
 
 void Jit::InvalidateCacheRange(u64 start_address, size_t length) {
     impl->InvalidateCacheRange(start_address, length);
+}
+
+PrecompileResult Jit::Precompile(std::uint64_t location, std::size_t keep_free) {
+    return impl->Precompile(location, keep_free);
+}
+
+std::size_t Jit::CodeCacheUsed() const {
+    return impl->CodeCacheUsed();
+}
+
+bool Jit::SharesCode() const {
+    return impl->SharesCode();
 }
 
 void Jit::Reset() {

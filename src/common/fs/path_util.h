@@ -59,6 +59,12 @@ enum EmuPath {
     SuyuConfigDir,
     SuyuCacheDir,
 
+    // The profile a non-portable build uses (%APPDATA%/lichii on Windows, the XDG data directory
+    // elsewhere). A portable build offers to bring this data into its local "user" directory.
+    LichiiDataDir,
+    LichiiDataConfigDir,
+    LichiiDataCacheDir,
+
     // used exclusively for save data linking
     RyujinxDir,
 };

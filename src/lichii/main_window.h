@@ -378,6 +378,8 @@ private slots:
     void OnGameListRemovePlayTimeData(u64 program_id);
     void OnGameListSetPlayTime(u64 program_id);
     void OnGameListDumpRomFS(u64 program_id, const std::string& game_path, DumpRomFSTarget target);
+    void OnGameListExportPipelineCache(u64 program_id);
+    void OnGameListImportPipelineCache(u64 program_id);
     void OnGameListVerifyIntegrity(const std::string& game_path);
     void OnGameListConvertToNup(const std::string& game_path);
     void OnGameListPrepareShaderWarm(u64 program_id, const std::string& game_path);

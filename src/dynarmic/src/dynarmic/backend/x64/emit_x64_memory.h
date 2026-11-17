@@ -394,12 +394,21 @@ void EmitExclusiveTestAndClear(BlockOfCode& code, const UserConfig& conf, Xbyak:
 
     code.mov(tmp, 0xDEAD'DEAD'DEAD'DEAD);
     const size_t processor_count = GetExclusiveMonitorProcessorCount(conf.global_monitor);
+    // Shared code runs on every processor: it skips the running one's monitor at run time.
+    const std::optional<u32> own_monitor = code.SharedCode()
+        ? code.PerCoreOffset(std::bit_cast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)))
+        : std::nullopt;
+    ASSERT(!code.SharedCode() || own_monitor);
     for (size_t processor_index = 0; processor_index < processor_count; processor_index++) {
-        if (processor_index == conf.processor_id) {
+        if (!own_monitor && processor_index == conf.processor_id) {
             continue;
         }
         Xbyak::Label ok;
         code.mov(pointer, std::bit_cast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, processor_index)));
+        if (own_monitor) {
+            code.cmp(pointer, qword[code.ABI_JIT_PTR + *own_monitor]);
+            code.je(ok, code.T_NEAR);
+        }
         code.cmp(qword[pointer], vaddr);
         code.jne(ok, code.T_NEAR);
         code.mov(qword[pointer], tmp);

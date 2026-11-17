@@ -20,6 +20,7 @@ public:
 
 private:
     void ShowMigrationPrompt(QMainWindow* main_window);
+    void ShowPortableImportPrompt(QMainWindow* main_window);
     void ShowMigrationCancelledMessage(QMainWindow* main_window);
     void MigrateUserData(QMainWindow* main_window, const bool clear_shader_cache,
                          const MigrationWorker::MigrationStrategy strategy);

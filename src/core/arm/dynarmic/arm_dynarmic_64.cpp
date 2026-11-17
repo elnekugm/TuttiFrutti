@@ -13,6 +13,7 @@
 #include "core/arm/dynarmic/arm_dynarmic.h"
 #include "core/arm/dynarmic/arm_dynarmic_64.h"
 #include "core/arm/dynarmic/dynarmic_exclusive_monitor.h"
+#include "core/arm/dynarmic/jit_warmup.h"
 #include "core/arm/dynarmic/window_trace.h"
 #include "core/core_timing.h"
 #include "core/hardware_properties.h"
@@ -309,6 +310,12 @@ u64 DynarmicCallbacks64::GetCNTPCT() {
     return ticks;
 }
 
+void DynarmicCallbacks64::BlockCompiled(u64 location) {
+    if (m_parent.m_warmup) {
+        m_parent.m_warmup->OnCompiled(m_parent.m_core_index, location);
+    }
+}
+
 bool DynarmicCallbacks64::CheckMemoryAccess(u64 addr, u64 size, Kernel::DebugWatchpointType type) {
     if (!m_check_memory_access) {
         return true;
@@ -543,7 +550,16 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
         config.host_call_return = !config.enable_cycle_counting;
     }
 #endif
+    config.shared_code_cache = m_shared_code;
     m_jit.emplace(config);
+    if (m_shared_code) {
+        if (!m_jit->SharesCode()) {
+            LOG_WARNING(Core_ARM, "Shared JIT code cache: core {} can't share it, compiling its own",
+                        m_core_index);
+        } else if (m_core_index == 0) {
+            LOG_INFO(Core_ARM, "Shared JIT code cache: the cores share one copy of compiled code");
+        }
+    }
 }
 
 HaltReason ArmDynarmic64::RunThread(Kernel::KThread* thread) {
@@ -607,17 +623,38 @@ void ArmDynarmic64::RewindBreakpointInstruction() {
     this->SetContext(m_breakpoint_context);
 }
 
-ArmDynarmic64::ArmDynarmic64(System& system, bool uses_wall_clock, Kernel::KProcess* process, DynarmicExclusiveMonitor& exclusive_monitor, std::size_t core_index)
+ArmDynarmic64::ArmDynarmic64(System& system, bool uses_wall_clock, Kernel::KProcess* process, DynarmicExclusiveMonitor& exclusive_monitor, std::size_t core_index,
+                             std::shared_ptr<Dynarmic::A64::SharedCodeCache> shared_code)
     : ArmInterface{uses_wall_clock}, m_system{system}, m_exclusive_monitor{exclusive_monitor}
     , m_cb(std::make_optional<DynarmicCallbacks64>(*this, process))
     , m_core_index{core_index}
+    , m_shared_code{std::move(shared_code)}
 {
     auto& page_table = process->GetPageTable().GetBasePageTable();
     auto& page_table_impl = page_table.GetImpl();
     MakeJit(&page_table_impl, page_table.GetAddressSpaceWidth());
 }
 
-ArmDynarmic64::~ArmDynarmic64() = default;
+ArmDynarmic64::~ArmDynarmic64() {
+    if (m_shared_code && m_core_index == 0) {
+        LOG_INFO(Core_ARM, "Shared JIT code cache: {} full clears, {} blocks failed the check",
+                 m_shared_code->Clears(), m_shared_code->VerifyFailures());
+    }
+}
+
+std::shared_ptr<Dynarmic::A64::SharedCodeCache> ArmDynarmic64::MakeSharedCodeCache(
+    System& system, bool multicore) {
+#if defined(ARCHITECTURE_x86_64)
+    const char* const setting = std::getenv("EDEN_NX2_SHARED_JIT");
+    if (!multicore || system.DebuggerEnabled() || (setting != nullptr && setting[0] == '0')) {
+        return nullptr;
+    }
+    const char* const verify = std::getenv("EDEN_NX2_SHARED_JIT_VERIFY");
+    return std::make_shared<Dynarmic::A64::SharedCodeCache>(verify != nullptr && verify[0] == '1');
+#else
+    return nullptr;
+#endif
+}
 
 void ArmDynarmic64::SetTpidrroEl0(u64 value) {
     m_cb->m_tpidrro_el0 = value;
@@ -666,6 +703,30 @@ void ArmDynarmic64::SignalInterrupt(Kernel::KThread* thread) {
 void ArmDynarmic64::ClearInstructionCache() {
     m_cb->last_code_addr = u64(-1);
     m_jit->ClearCache();
+}
+
+bool ArmDynarmic64::SupportsJitWarmup() const {
+#ifdef ARCHITECTURE_x86_64
+    return true;
+#else
+    // Only dynarmic's x64 backend implements Jit::Precompile.
+    return false;
+#endif
+}
+
+void ArmDynarmic64::SetJitWarmup(std::shared_ptr<JitWarmup> warmup) {
+    m_warmup = std::move(warmup);
+}
+
+bool ArmDynarmic64::WarmUp(const std::atomic<bool>& stop) {
+    if (!m_warmup) {
+        return false;
+    }
+    const bool more = m_warmup->Run(m_core_index, *m_jit, stop);
+    // An InvalidateCacheRange from another thread during the slice may have been followed by a
+    // precompile that cached the old page again: the next compile reads guest memory afresh.
+    m_cb->last_code_addr = u64(-1);
+    return more;
 }
 
 void ArmDynarmic64::InvalidateCacheRange(u64 addr, std::size_t size) {

@@ -766,6 +766,8 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     QAction* open_mod_location = context_menu.addAction(tr("Open Mod Data Location"));
     QAction* open_transferable_shader_cache =
         context_menu.addAction(tr("Open Transferable Pipeline Cache"));
+    QAction* export_pipeline_cache = context_menu.addAction(tr("Export Pipeline Cache..."));
+    QAction* import_pipeline_cache = context_menu.addAction(tr("Import Pipeline Cache..."));
     const bool has_shader_warm = ShaderWarmFilesExist(program_id);
     QAction* prepare_shaders = context_menu.addAction(
         has_shader_warm ? tr("Rebuild Shader Precache") : tr("Build Shader Precache"));
@@ -851,13 +853,15 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
                 [this, program_id] { emit ReportCompatibilityRequested(program_id); });
     }
 
-    const std::array<std::pair<QAction*, const char*>, 20> icons{{
+    const std::array<std::pair<QAction*, const char*>, 22> icons{{
         {favorite, "star"},
         {start_game, "play"},
         {start_game_global, "play"},
         {open_save_location, "folder"},
         {open_mod_location, "puzzle"},
         {open_transferable_shader_cache, "layers"},
+        {export_pipeline_cache, "share"},
+        {import_pipeline_cache, "download"},
         {prepare_shaders, "cpu"},
         {delete_shader_warm, "trash"},
         {ryujinx, "link"},
@@ -885,6 +889,8 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     open_save_location->setVisible(program_id != 0);
     open_mod_location->setVisible(program_id != 0);
     open_transferable_shader_cache->setVisible(program_id != 0);
+    export_pipeline_cache->setVisible(program_id != 0);
+    import_pipeline_cache->setVisible(program_id != 0);
     prepare_shaders->setVisible(program_id != 0);
     remove_update->setVisible(program_id != 0);
     remove_dlc->setVisible(program_id != 0);
@@ -907,6 +913,10 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     });
     connect(open_transferable_shader_cache, &QAction::triggered, this,
             [this, program_id]() { emit OpenTransferableShaderCacheRequested(program_id); });
+    connect(export_pipeline_cache, &QAction::triggered, this,
+            [this, program_id]() { emit ExportPipelineCacheRequested(program_id); });
+    connect(import_pipeline_cache, &QAction::triggered, this,
+            [this, program_id]() { emit ImportPipelineCacheRequested(program_id); });
     connect(prepare_shaders, &QAction::triggered, this,
             [this, program_id, path]() { emit PrepareShaderWarmRequested(program_id, path); });
     if (delete_shader_warm) {

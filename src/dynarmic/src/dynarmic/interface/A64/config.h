@@ -129,7 +129,13 @@ struct UserCallbacks {
     virtual std::uint64_t GetTicksRemaining() = 0;
     // Get value in the emulated counter-timer physical count register.
     virtual std::uint64_t GetCNTPCT() = 0;
+
+    // A block was compiled because execution reached it (not for Jit::Precompile). location is
+    // the block's IR::LocationDescriptor value.
+    virtual void BlockCompiled(std::uint64_t /*location*/) {}
 };
+
+class SharedCodeCache;
 
 struct UserConfig {
     /// Fastmem Pointer
@@ -374,6 +380,10 @@ struct UserConfig {
 
     /// Internal use only
     bool very_verbose_debugging_output = false;
+
+    /// Jits given the same SharedCodeCache keep one copy of their compiled code between them
+    /// (x64 only; see SharedCodeCache in a64.h).
+    std::shared_ptr<SharedCodeCache> shared_code_cache;
 
     inline bool HasOptimization(OptimizationFlag f) const {
         if (!unsafe_optimizations) {

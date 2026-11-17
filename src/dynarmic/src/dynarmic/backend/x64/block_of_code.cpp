@@ -170,7 +170,8 @@ bool IsUnderRosetta() {
 
 }  // anonymous namespace
 
-BlockOfCode::BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_code_size, std::function<void(BlockOfCode&)> rcp)
+BlockOfCode::BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_code_size, std::function<void(BlockOfCode&)> rcp,
+                         bool shared_code, std::vector<PerCoreValue> per_core)
     : Xbyak::CodeGenerator(total_code_size
 #ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
         , Xbyak::DontSetProtectRWE
@@ -181,7 +182,13 @@ BlockOfCode::BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_cod
     , constant_pool(*this, CONSTANT_POOL_SIZE)
     , jsi(jsi)
     , cb(std::move(cb))
+    , shared_code(shared_code)
+    , per_core_values(std::move(per_core))
 {
+#ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
+    // Other Jits run the code while one writes to it: no W^X switching.
+    ASSERT(!shared_code);
+#endif
     EnableWriting();
     EnsureMemoryCommitted(PRELUDE_COMMIT_SIZE);
     GenRunCode(rcp);

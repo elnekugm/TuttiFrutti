@@ -43,9 +43,19 @@ struct RunCodeCallbacks {
     std::optional<u32> host_stack_base_offset = std::nullopt;
 };
 
+/// Code shared by several Jits (A64 shared_code_cache): a pointer that differs between them, and
+/// the offset in the JIT state where each Jit keeps its own.
+struct PerCoreValue {
+    u64 value;
+    u32 offset;
+};
+
 class BlockOfCode final : public Xbyak::CodeGenerator {
 public:
-    BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_code_size, std::function<void(BlockOfCode&)> rcp);
+    /// With shared_code, `per_core` names the pointers of the Jit that builds the code which every
+    /// Jit sharing it holds a value of its own for; more can be added before they are emitted.
+    BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_code_size, std::function<void(BlockOfCode&)> rcp,
+                bool shared_code = false, std::vector<PerCoreValue> per_core = {});
     BlockOfCode(const BlockOfCode&) = delete;
 
     /// Call when external emitters have finished emitting their preludes.
@@ -195,6 +205,34 @@ public:
     bool HasFarCode() const { return far_code_begin != nullptr; }
     void SwitchToFarCode();
     void SwitchToNearCode();
+    /// Whether several Jits run this code (A64 shared_code_cache).
+    bool SharedCode() const { return shared_code; }
+    void AddPerCoreValue(u64 value, u32 offset) { per_core_values.push_back({value, offset}); }
+    const std::vector<PerCoreValue>& PerCoreValues() const { return per_core_values; }
+    std::optional<u32> PerCoreOffset(u64 value) const {
+        for (const PerCoreValue& per_core : per_core_values) {
+            if (per_core.value == value) {
+                return per_core.offset;
+            }
+        }
+        return std::nullopt;
+    }
+    /// Code emitter: mov reg, value. In shared code, a per-core value is loaded from the running
+    /// Jit's state (ABI_JIT_PTR) instead, so the code is right for whichever Jit runs it.
+    void MovPerCore(const Xbyak::Reg64& reg, u64 value) {
+        if (shared_code) {
+            for (const PerCoreValue& per_core : per_core_values) {
+                if (per_core.value == value) {
+                    mov(reg, qword[ABI_JIT_PTR + per_core.offset]);
+                    return;
+                }
+            }
+        }
+        mov(reg, value);
+    }
+    /// Shared code: the far code pointer, so a block's cold code can be checked too.
+    const u8* FarCodePtr() const { return in_far_code ? getCurr<const u8*>() : far_code_ptr; }
+
     std::optional<s32> FoldedAddressDisp(const void* inst) const {
         for (const auto& [add, disp] : folded_address_adds) {
             if (add == inst) {
@@ -230,6 +268,8 @@ private:
     RunCodeCallbacks cb;
     CodePtr code_begin = nullptr;
     bool prelude_complete = false;
+    bool shared_code = false;
+    std::vector<PerCoreValue> per_core_values;
 
     void GenRunCode(std::function<void(BlockOfCode&)> rcp);
 };

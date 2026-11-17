@@ -65,6 +65,13 @@ A64EmitX64::A64EmitX64(BlockOfCode& code, A64::UserConfig conf, A64::Jit* jit_in
         fast_dispatch_table.resize(size_t(1) << bits);
         fast_dispatch_table_mask = u32(((size_t(1) << bits) - 1) * sizeof(FastDispatchEntry)) & ~u32(fast_dispatch_set_size * sizeof(FastDispatchEntry) - 1);
     }
+    if (code.SharedCode()) {
+        // Each Jit sharing the code has its own of these (A64JitState::per_core).
+        code.AddPerCoreValue(u64(&this->conf), A64JitState::PerCoreOffset(A64JitState::UserConfigSlot));
+        if (!fast_dispatch_table.empty()) {
+            code.AddPerCoreValue(u64(fast_dispatch_table.data()), A64JitState::PerCoreOffset(A64JitState::FastDispatchTableSlot));
+        }
+    }
     code.elide_redundant_zext = conf.elide_redundant_zext;
     if (conf.far_code) {
         code.EnableFarCode(conf.code_cache_size / 4);
@@ -331,7 +338,7 @@ void A64EmitX64::GenTerminalHandlers() {
         check_halt();
         calculate_location_descriptor();
         code.L(rsb_cache_miss);
-        code.mov(r8, u64(fast_dispatch_table.data()));
+        code.MovPerCore(r8, u64(fast_dispatch_table.data()));
         //code.mov(r12, qword[code.ABI_JIT_PTR + offsetof(A64JitState, pc)]);
         code.mov(r12, rbx);
         if (code.HasHostFeature(HostFeature::SSE42)) {
@@ -766,7 +773,7 @@ void A64EmitX64::EmitA64GetDCZID(A64EmitContext& ctx, IR::Inst* inst) {
 void A64EmitX64::EmitA64GetTPIDR(A64EmitContext& ctx, IR::Inst* inst) {
     const Xbyak::Reg64 result = ctx.reg_alloc.ScratchGpr(code);
     if (conf.tpidr_el0) {
-        code.mov(result, u64(conf.tpidr_el0));
+        code.MovPerCore(result, u64(conf.tpidr_el0));
         code.mov(result, qword[result]);
     } else {
         code.xor_(result.cvt32(), result.cvt32());
@@ -777,7 +784,7 @@ void A64EmitX64::EmitA64GetTPIDR(A64EmitContext& ctx, IR::Inst* inst) {
 void A64EmitX64::EmitA64GetTPIDRRO(A64EmitContext& ctx, IR::Inst* inst) {
     const Xbyak::Reg64 result = ctx.reg_alloc.ScratchGpr(code);
     if (conf.tpidrro_el0) {
-        code.mov(result, u64(conf.tpidrro_el0));
+        code.MovPerCore(result, u64(conf.tpidrro_el0));
         code.mov(result, qword[result]);
     } else {
         code.xor_(result.cvt32(), result.cvt32());
@@ -790,7 +797,7 @@ void A64EmitX64::EmitA64SetTPIDR(A64EmitContext& ctx, IR::Inst* inst) {
     const Xbyak::Reg64 value = ctx.reg_alloc.UseGpr(code, args[0]);
     const Xbyak::Reg64 addr = ctx.reg_alloc.ScratchGpr(code);
     if (conf.tpidr_el0) {
-        code.mov(addr, u64(conf.tpidr_el0));
+        code.MovPerCore(addr, u64(conf.tpidr_el0));
         code.mov(qword[addr], value);
     }
 }
@@ -1036,6 +1043,16 @@ void A64EmitX64::EmitUnlinkedExit(const IR::LocationDescriptor& target) {
     code.ForceReturnFromRunCode();
 }
 
+// Near forms only, so a patch site never changes length (shared code rewrites just the rel32).
+namespace {
+void NearJg(BlockOfCode& code, const void* target, Xbyak::CodeGenerator::LabelType) { code.jg(target); }
+void NearJz(BlockOfCode& code, const void* target, Xbyak::CodeGenerator::LabelType) { code.jz(target); }
+void NearJmp(BlockOfCode& code, const void* target, Xbyak::CodeGenerator::LabelType type) { code.jmp(target, type); }
+void NearJg(BlockOfCode& code, const Xbyak::Label& target, Xbyak::CodeGenerator::LabelType type) { code.jg(target, type); }
+void NearJz(BlockOfCode& code, const Xbyak::Label& target, Xbyak::CodeGenerator::LabelType type) { code.jz(target, type); }
+void NearJmp(BlockOfCode& code, const Xbyak::Label& target, Xbyak::CodeGenerator::LabelType type) { code.jmp(target, type); }
+}  // namespace
+
 // Compact exits: a 5/6-byte rel32 jump to the target block, or to the target's shared exit stub
 // while unlinked. Every site gets its stub at first emission, so Unpatch always finds one.
 #define COMPACT_PATCH(JCC, SIZE)                                                                    \
@@ -1044,12 +1061,12 @@ void A64EmitX64::EmitUnlinkedExit(const IR::LocationDescriptor& target) {
             EnsureExitStub(target_desc);                                                            \
         }                                                                                           \
         if (target_code_ptr) {                                                                      \
-            code.JCC(target_code_ptr);                                                              \
+            Near##JCC(code, target_code_ptr, code.T_NEAR);                                          \
         } else if (const auto it = exit_stubs.find(target_desc.Value()); it != exit_stubs.end()) { \
-            code.JCC(it->second);                                                                   \
+            Near##JCC(code, it->second, code.T_NEAR);                                               \
         } else {                                                                                    \
             ASSERT(emitting_block);                                                                 \
-            code.JCC(*PendingExitStub(target_desc), code.T_NEAR);                                   \
+            Near##JCC(code, *PendingExitStub(target_desc), code.T_NEAR);                            \
         }                                                                                           \
         code.EnsurePatchLocationSize(patch_location, SIZE);                                         \
         return;                                                                                     \
@@ -1057,7 +1074,7 @@ void A64EmitX64::EmitUnlinkedExit(const IR::LocationDescriptor& target) {
 
 void A64EmitX64::EmitPatchJg(const IR::LocationDescriptor& target_desc, CodePtr target_code_ptr) {
     const CodePtr patch_location = code.getCurr();
-    COMPACT_PATCH(jg, 6)
+    COMPACT_PATCH(Jg, 6)
     if (target_code_ptr) {
         code.jg(target_code_ptr);
     } else {
@@ -1070,7 +1087,7 @@ void A64EmitX64::EmitPatchJg(const IR::LocationDescriptor& target_desc, CodePtr 
 
 void A64EmitX64::EmitPatchJz(const IR::LocationDescriptor& target_desc, CodePtr target_code_ptr) {
     const CodePtr patch_location = code.getCurr();
-    COMPACT_PATCH(jz, 6)
+    COMPACT_PATCH(Jz, 6)
     if (target_code_ptr) {
         code.jz(target_code_ptr);
     } else {
@@ -1083,7 +1100,7 @@ void A64EmitX64::EmitPatchJz(const IR::LocationDescriptor& target_desc, CodePtr 
 
 void A64EmitX64::EmitPatchJmp(const IR::LocationDescriptor& target_desc, CodePtr target_code_ptr) {
     const CodePtr patch_location = code.getCurr();
-    COMPACT_PATCH(jmp, 5)
+    COMPACT_PATCH(Jmp, 5)
     if (target_code_ptr) {
         code.jmp(target_code_ptr);
     } else {
@@ -1101,13 +1118,21 @@ void A64EmitX64::EmitPatchMovRcx(CodePtr target_code_ptr) {
         target_code_ptr = code.GetReturnFromRunCodeAddress();
     }
     const CodePtr patch_location = code.getCurr();
-    code.mov(code.rcx, u64(target_code_ptr));
+    if (code.SharedCode()) {
+        // Always mov rcx, imm64, whose imm64 shared code rewrites in place.
+        code.db(0x48);
+        code.db(0xB9);
+        code.dq(u64(target_code_ptr));
+    } else {
+        code.mov(code.rcx, u64(target_code_ptr));
+    }
     code.EnsurePatchLocationSize(patch_location, 10);
 }
 
 void A64EmitX64::Unpatch(const IR::LocationDescriptor& location) {
     EmitX64::Unpatch(location);
-    if (conf.HasOptimization(OptimizationFlag::FastDispatch)) {
+    // Shared code: each Jit has its own table, which it clears after the invalidation.
+    if (conf.HasOptimization(OptimizationFlag::FastDispatch) && !code.SharedCode()) {
         code.DisableWriting();
         FastDispatchEntry* const set = &(*fast_dispatch_table_lookup)(location.Value());
         for (size_t way = 0; way < fast_dispatch_set_size; ++way) {
