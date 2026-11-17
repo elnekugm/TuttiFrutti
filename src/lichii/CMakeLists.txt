@@ -14,17 +14,13 @@ endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
-if(LICHII_TESTS)
-    add_subdirectory(../tests/qt_compatibility ${CMAKE_BINARY_DIR}/qt_compatibility_tests)
-endif()
+# (the desktop compatibility-report test target was removed with the feature)
 
 add_executable(lichii
     Info.plist
     about_dialog.cpp
     about_dialog.h
     aboutdialog.ui
-    compatibility_report.cpp
-    compatibility_report.h
     applets/qt_amiibo_settings.cpp
     applets/qt_amiibo_settings.h
     applets/qt_amiibo_settings.ui

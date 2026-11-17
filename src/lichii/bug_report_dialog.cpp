@@ -41,10 +41,10 @@ BugReportDialog::BugReportDialog(Core::System& system, QWidget* parent)
     layout->addWidget(description, 1);
 
     auto* const privacy = new QLabel(
-        tr("<b>Send this report privately to the TuttiFrutti maintainers</b> (the log bot's /bug "
-           "command or a direct message), not to a public channel or issue. It holds the "
-           "game's textures and shaders from one frame. Your user name is removed from paths "
-           "and online service settings are left out."));
+        tr("<b>Keep this report private.</b> Save it and send it to the TuttiFrutti maintainers "
+           "privately; do not post it in a public issue or channel. It holds the game's textures "
+           "and shaders from one frame. Your user name is removed from paths and online service "
+           "settings are left out."));
     privacy->setWordWrap(true);
     layout->addWidget(privacy);
 
