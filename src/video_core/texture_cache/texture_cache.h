@@ -1327,12 +1327,15 @@ template <class P>
 void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
     using namespace VideoCommon::Dirty;
     struct ClearingScope {
-        bool& flag;
+        bool& clearing;
+        bool& drawing;
         ~ClearingScope() {
-            flag = false;
+            clearing = false;
+            drawing = false;
         }
-    } clearing_scope{clearing_render_targets};
+    } clearing_scope{clearing_render_targets, drawing_render_targets};
     clearing_render_targets = is_clear;
+    drawing_render_targets = !is_clear;
     auto& flags = maxwell3d->dirty.flags;
     if (!flags[Dirty::RenderTargets]) {
         for (size_t index = 0; index < NUM_RT; ++index) {
@@ -2425,6 +2428,7 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::TextureUpload};
 
     image.flags &= ~ImageFlagBits::CpuModified;
+    image.storage_written_levels = 0;
 
     // Images uploaded by layer stay tracked while some of their layers are dirty.
     if (False(image.flags & ImageFlagBits::Tracked)) {
@@ -4730,7 +4734,7 @@ void TextureCache<P>::PrepareImage(ImageId image_id, bool is_modification, bool 
             VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::Invalidation);
         }
         MarkModification(image);
-        if (!clearing_render_targets && image.first_written_frame == 0) {
+        if (drawing_render_targets && image.first_written_frame == 0) {
             image.first_written_frame = frame_tick + 1;
         }
     }

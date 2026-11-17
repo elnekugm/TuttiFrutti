@@ -11,6 +11,7 @@
 #include <functional>
 #include <mutex>
 #include <span>
+#include <utility>
 
 #include <boost/container/small_vector.hpp>
 
@@ -106,6 +107,11 @@ public:
         return kept_spirv;
     }
 
+    /// True the first time it is called, so a dispatch's wait for this build is logged once
+    [[nodiscard]] bool FirstWaitForBuild() noexcept {
+        return !std::exchange(wait_logged, true);
+    }
+
     /// Storage images written by the last configured dispatch
     [[nodiscard]] std::span<const VideoCommon::ImageViewId> WrittenImages() const noexcept {
         return written_images;
@@ -149,6 +155,7 @@ private:
     u64 shader_hash{};
     u32 num_descriptor_entries{};
     boost::container::small_vector<VideoCommon::ImageViewId, 8> written_images;
+    bool wait_logged{};
     std::vector<SampledImage> sampled_images;
 
     VideoCommon::ComputeUniformBufferSizes uniform_buffer_sizes{};

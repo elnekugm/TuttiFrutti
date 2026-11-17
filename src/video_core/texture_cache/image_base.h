@@ -136,7 +136,7 @@ struct ImageBase {
     /// frame_tick + 1 of the first frame a render pass other than a clear wrote it, or 0.
     u64 first_written_frame = 0;
     /// Levels whose every layer a shader last wrote through a storage view. Any other GPU write
-    /// (render pass, clear, copy, alias copy) clears them.
+    /// (render pass, clear, copy, alias copy) and an upload from guest memory clear them.
     u32 storage_written_levels = 0;
     size_t lru_index = SIZE_MAX;
 

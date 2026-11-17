@@ -2688,7 +2688,7 @@ bool PipelineCache::SkipUnbuiltDispatch(ComputePipeline& pipeline, bool outputs_
     const NativePendingMode mode = NativeMode();
     switch (DecideNativePending(mode, outputs_hold_gpu_data, native_wait_budget_us)) {
     case NativeDrawAction::Wait:
-        if (mode != NativePendingMode::Wait) {
+        if (mode != NativePendingMode::Wait && pipeline.FirstWaitForBuild()) {
             LOG_INFO(Render_Vulkan,
                      "Compute pipeline {:016x} is still building: its dispatch waits, its outputs "
                      "hold no earlier shader results",

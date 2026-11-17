@@ -729,6 +729,9 @@ private:
     /// True while a clear binds its render targets (UpdateRenderTargets(true)), so JoinImages can
     /// skip the upload of a new target the clear overwrites whole.
     bool clearing_render_targets = false;
+    /// True while a draw binds its render targets (UpdateRenderTargets(false)): only these writes
+    /// set first_written_frame, not blits, copies or DMA.
+    bool drawing_render_targets = false;
     bool is_rescaling = false;
     /// The bound depth target is wider than tall by padding only (see FindDepthBuffer).
     bool depth_target_padded = false;
