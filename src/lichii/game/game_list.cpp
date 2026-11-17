@@ -749,11 +749,6 @@ void GameList::PopupContextMenu(const QPoint& menu_location) {
     }
     context_menu.exec(m_currentView->viewport()->mapToGlobal(menu_location));
 }
-
-void GameList::SetReportableProgramId(u64 program_id) {
-    reportable_program_id = program_id;
-}
-
 void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::string& path) {
     // TODO(crueter): Refactor this and make it less bad
     QAction* favorite = context_menu.addAction(tr("Favorite"));
@@ -847,12 +842,6 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     lookup_artwork->setVisible(program_id != 0);
     lookup_artwork->setEnabled(!UISettings::values.steamgriddb_api_key.GetValue().empty());
     QAction* properties = context_menu.addAction(tr("Configure Game"));
-    if (program_id != 0 && program_id == reportable_program_id) {
-        auto* report = context_menu.addAction(tr("Submit compatibility report…"));
-        connect(report, &QAction::triggered, this,
-                [this, program_id] { emit ReportCompatibilityRequested(program_id); });
-    }
-
     const std::array<std::pair<QAction*, const char*>, 22> icons{{
         {favorite, "star"},
         {start_game, "play"},
