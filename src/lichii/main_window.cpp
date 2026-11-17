@@ -415,7 +415,7 @@ bool WriteNextendoProfile(Service::Account::ProfileManager& manager, const Commo
     QImage image;
     if (!image.loadFromData(reinterpret_cast<const uchar*>(pull.avatar->data()),
                             static_cast<int>(pull.avatar->size()))) {
-        LOG_WARNING(Frontend, "nextendo.network sent a profile picture Lichii can't read");
+        LOG_WARNING(Frontend, "nextendo.network sent a profile picture TuttiFrutti can't read");
         return true;
     }
     constexpr int size = 256;
@@ -531,14 +531,14 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                 case Common::Nextendo::SignOutReason::None:
                     return;
                 case Common::Nextendo::SignOutReason::SessionExpired:
-                    why = tr("Your Nextendo session expired, so Lichii signed you out.");
+                    why = tr("Your Nextendo session expired, so TuttiFrutti signed you out.");
                     break;
                 case Common::Nextendo::SignOutReason::SessionRevoked:
-                    why = tr("Your session was ended on nextendo.network, so Lichii signed you "
+                    why = tr("Your session was ended on nextendo.network, so TuttiFrutti signed you "
                              "out.");
                     break;
                 case Common::Nextendo::SignOutReason::MissingScope:
-                    why = tr("Your Nextendo sign-in didn't allow online play, so Lichii signed "
+                    why = tr("Your Nextendo sign-in didn't allow online play, so TuttiFrutti signed "
                              "you out.");
                     break;
                 }
@@ -2193,7 +2193,7 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
         case Core::SystemResultStatus::ErrorMemoryAllocation:
             QMessageBox::critical(
                 this, tr("Not enough memory to start the game"),
-                tr("Lichii could not allocate the game's memory. Close other applications and "
+                tr("TuttiFrutti could not allocate the game's memory. Close other applications and "
                    "check that your system has enough available memory and paging-file space, "
                    "then try again."));
             break;
@@ -2342,7 +2342,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     if (close_pending) {
         return;
     }
-    LOG_INFO(Frontend, "Lichii starting...");
+    LOG_INFO(Frontend, "TuttiFrutti starting...");
     report_session.reset();
     game_list->SetReportableProgramId(0);
 
@@ -2504,7 +2504,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         }
         session.mods = CompatibilityReporting::SummarizeEnabledAddons(mods);
         session.updates = CompatibilityReporting::SummarizeEnabledAddons(updates);
-        session.build = QStringLiteral("Lichii %1 (%2)")
+        session.build = QStringLiteral("TuttiFrutti %1 (%2)")
                             .arg(QString::fromUtf8(Common::g_build_version),
                                  QString::fromUtf8(Common::g_scm_rev).left(12));
 #ifdef ARCHITECTURE_x86_64
@@ -4106,7 +4106,7 @@ void MainWindow::OnMenuReportCompatibility() {
     //         !Settings::values.eden_username.GetValue().empty()) {
     //     } else {
     //         QMessageBox::critical(
-    //             this, tr("Missing Lichii Account"),
+    //             this, tr("Missing TuttiFrutti Account"),
     //             tr("In order to submit a game compatibility test case, you must set up your web
     //             token "
     //                "and "
@@ -5697,7 +5697,7 @@ void MainWindow::OnEmulatorUpdateAvailable() {
             QMessageBox::information(
                 this, title,
                 tr("This is a test or development build (%1) without a published release tag, so "
-                   "Lichii cannot compare it with published releases. Download a release from "
+                   "TuttiFrutti cannot compare it with published releases. Download a release from "
                    "GitHub to get updates.")
                     .arg(QString::fromUtf8(Common::g_build_version)));
             break;
@@ -5721,7 +5721,7 @@ void MainWindow::OnEmulatorUpdateAvailable() {
     }
     if (result.failure == UpdateChecker::Failure::RateLimited) {
         statusBar()->showMessage(
-            tr("Could not check for updates: GitHub rate limit reached. Lichii will try again at "
+            tr("Could not check for updates: GitHub rate limit reached. TuttiFrutti will try again at "
                "the next start."),
             15000);
         return;
@@ -6300,7 +6300,7 @@ void MainWindow::OnCheckGraphicsBackend() {
         UISettings::values.gui_force_x11.SetValue(true);
         GraphicsBackend::SetForceX11(true);
         QMessageBox::information(this, tr("Restart Required"),
-                                 tr("Restart Lichii to apply the X11 backend."));
+                                 tr("Restart TuttiFrutti to apply the X11 backend."));
     }
 }
 #endif
@@ -6427,8 +6427,8 @@ bool MainWindow::ConfirmClose() {
         UISettings::values.confirm_before_stopping.GetValue() == ConfirmStop::Ask_Based_On_Game)
         return true;
 
-    const auto text = tr("Are you sure you want to close Lichii?");
-    return question(this, tr("Lichii"), text);
+    const auto text = tr("Are you sure you want to close TuttiFrutti?");
+    return question(this, tr("TuttiFrutti"), text);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -6534,7 +6534,7 @@ bool MainWindow::ConfirmChangeGame() {
 
     // Use custom question to link controller navigation
     return question(
-        this, tr("Lichii"),
+        this, tr("TuttiFrutti"),
         tr("Are you sure you want to stop the emulation? Any unsaved progress will be lost."),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
 }
@@ -6543,10 +6543,10 @@ bool MainWindow::ConfirmForceLockedExit() {
     if (QtCommon::emu_thread == nullptr)
         return true;
 
-    const auto text = tr("The currently running application has requested Lichii to not exit.\n\n"
+    const auto text = tr("The currently running application has requested TuttiFrutti to not exit.\n\n"
                          "Would you like to bypass this and exit anyway?");
 
-    return question(this, tr("Lichii"), text);
+    return question(this, tr("TuttiFrutti"), text);
 }
 
 void MainWindow::RequestGameExit() {

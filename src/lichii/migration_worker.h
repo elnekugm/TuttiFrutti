@@ -33,7 +33,7 @@ static constexpr std::array<Emulator, 5> legacy_emus = {
 
 // The profile a non-portable build kept, offered to a portable build as an import source.
 inline constexpr Emulator lichii_data_source =
-    STRUCT_EMU(QT_TR_NOOP("Lichii (previous profile)"), LichiiData);
+    STRUCT_EMU(QT_TR_NOOP("TuttiFrutti (previous profile)"), LichiiData);
 
 class MigrationWorker : public QObject {
     Q_OBJECT

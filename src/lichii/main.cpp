@@ -152,7 +152,7 @@ int main(int argc, char* argv[]) {
 
     // Init settings params
     QCoreApplication::setOrganizationName(QStringLiteral("eden"));
-    QCoreApplication::setApplicationName(QStringLiteral("Lichii"));
+    QCoreApplication::setApplicationName(QStringLiteral("TuttiFrutti"));
 
     // Increases the maximum open file limit.
     // TODO: This should be common to all frontends.
@@ -258,7 +258,7 @@ int main(int argc, char* argv[]) {
                     &MainWindow::OnAppFocusStateChanged);
         return app.exec();
     } catch (const std::exception& exception) {
-        QMessageBox::critical(nullptr, QObject::tr("Lichii startup stopped"),
+        QMessageBox::critical(nullptr, QObject::tr("TuttiFrutti startup stopped"),
                               QString::fromUtf8(exception.what()));
         return EXIT_FAILURE;
     }
