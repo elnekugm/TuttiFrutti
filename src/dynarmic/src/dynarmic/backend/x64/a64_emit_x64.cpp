@@ -98,23 +98,9 @@ A64EmitX64::~A64EmitX64() = default;
 
 void A64EmitX64::CaptureSharedCallbacks(A64::UserCallbacks* callbacks) {
     ASSERT(callbacks != nullptr);
-    // Every A64 callback whose thunk is emitted into a block. A new one must be added here: a
-    // shared-code site without a captured thunk asserts in CallbackArg.
-    CaptureSharedCallback<&A64::UserCallbacks::CallSVC>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::ExceptionRaised>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::DataCacheOperationRaised>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::InstructionCacheOperationRaised>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::InstructionSynchronizationBarrierRaised>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::GetCNTPCT>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::MemoryRead>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::MemoryWrite>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::MemoryRead128>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::MemoryWrite128>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::MemoryWriteExclusive8>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::MemoryWriteExclusive16>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::MemoryWriteExclusive32>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::MemoryWriteExclusive64>(callbacks);
-    CaptureSharedCallback<&A64::UserCallbacks::MemoryWriteExclusive128>(callbacks);
+#define A64_CAPTURE_SHARED_CALLBACK(callback) CaptureSharedCallback<callback>(callbacks);
+    A64_SHARED_CALLBACKS(A64_CAPTURE_SHARED_CALLBACK)
+#undef A64_CAPTURE_SHARED_CALLBACK
 }
 
 A64EmitX64::BlockDescriptor A64EmitX64::Emit(IR::Block& block) noexcept {

@@ -98,6 +98,15 @@ public:
     std::atomic<u64> memory_reads{0};
     std::atomic<bool> svc{false};
     std::atomic<bool> unexpected{false};
+    /// Set when this Environment is destroyed, so a test can prove the order: shared code must
+    /// not use it after that.
+    std::atomic<bool>* destroyed = nullptr;
+
+    ~Environment() override {
+        if (destroyed != nullptr) {
+            destroyed->store(true);
+        }
+    }
 
     std::optional<u32> MemoryReadCode(u64 address) override {
         const auto it = code->find(address);
@@ -360,16 +369,20 @@ TEST_CASE("A member Jit compiles after the founding Jit is destroyed", "[jit_sha
     // destroyed would read freed memory. Only code addresses captured at join time survive.
     const auto cache = std::make_shared<SharedCodeCache>(true, true);
     const auto chain = std::make_shared<const Code>(ChainProgram(64));
+    std::atomic<bool> founder_callbacks_destroyed{false};
     std::unique_ptr<Core> member;
     {
         Core founder{cache, chain, 0};
+        founder.env.destroyed = &founder_callbacks_destroyed;
         REQUIRE(founder.jit->SharesCode());
         REQUIRE(founder.RunProgram() == 64);
         member = std::make_unique<Core>(cache, chain, 1);
         REQUIRE(member->jit->SharesCode());
         REQUIRE(member->RunProgram() == 64);
     }
-    // The founder's callbacks, UserConfig, TPIDR_EL0, fast dispatch table and Jit::Impl are gone.
+    // The founder's callbacks object, UserConfig, TPIDR_EL0, fast dispatch table and Jit::Impl are
+    // gone: Core destroys its Jit before its Environment, and the whole Core before this point.
+    REQUIRE(founder_callbacks_destroyed.load());
     member->env.code = std::make_shared<const Code>(LoopProgram(7));
     member->jit->InvalidateCacheRange(Entry, 0x1000);
     const u64 compiles_before = cache->GetStats().compiles;

@@ -31,6 +31,34 @@
 
 namespace Dynarmic::Backend::X64 {
 
+/// The A64 user callbacks whose thunks shared code may emit. CaptureSharedCallbacks resolves each
+/// one while the founding Jit is alive, and CallbackArg rejects any other at compile time, so an
+/// emitted callback that is not captured cannot build.
+#define A64_SHARED_CALLBACKS(X)                                              \
+    X(&A64::UserCallbacks::CallSVC)                                          \
+    X(&A64::UserCallbacks::ExceptionRaised)                                  \
+    X(&A64::UserCallbacks::DataCacheOperationRaised)                         \
+    X(&A64::UserCallbacks::InstructionCacheOperationRaised)                  \
+    X(&A64::UserCallbacks::InstructionSynchronizationBarrierRaised)          \
+    X(&A64::UserCallbacks::GetCNTPCT)                                        \
+    X(&A64::UserCallbacks::MemoryRead)                                       \
+    X(&A64::UserCallbacks::MemoryWrite)                                      \
+    X(&A64::UserCallbacks::MemoryRead128)                                    \
+    X(&A64::UserCallbacks::MemoryWrite128)                                   \
+    X(&A64::UserCallbacks::MemoryWriteExclusive8)                            \
+    X(&A64::UserCallbacks::MemoryWriteExclusive16)                           \
+    X(&A64::UserCallbacks::MemoryWriteExclusive32)                           \
+    X(&A64::UserCallbacks::MemoryWriteExclusive64)                           \
+    X(&A64::UserCallbacks::MemoryWriteExclusive128)
+
+template<auto mfp>
+inline constexpr bool IsSharedCallback = false;
+
+#define A64_SHARED_CALLBACK_DECLARE(callback) \
+    template<> inline constexpr bool IsSharedCallback<callback> = true;
+A64_SHARED_CALLBACKS(A64_SHARED_CALLBACK_DECLARE)
+#undef A64_SHARED_CALLBACK_DECLARE
+
 /// UserConfig::host_call_return in effect: it needs rsp-free blocks (no %rbp frame, no cycle
 /// counter on the stack).
 inline bool HostCallReturn(const A64::UserConfig& conf) {
@@ -161,6 +189,8 @@ public:
     /// zero argument (the running Jit's callbacks pointer comes from its state).
     template<auto mfp>
     ArgCallback CallbackArg() const {
+        static_assert(IsSharedCallback<mfp>,
+                      "shared code: add this callback to A64_SHARED_CALLBACKS and CaptureSharedCallbacks");
         if (!code.SharedCode()) {
             return Devirtualize<mfp>(conf.callbacks);
         }
