@@ -856,8 +856,11 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         Settings::values.vertex_input_dynamic_state.GetValue();
     dynamic_features.has_static_vertex_repack =
         StaticVertexRepackEnabled(device.GetMinVertexInputBindingStrideAlignment());
-    VideoCommon::Nx2FastDraw::g_vertex_streams_dynamic =
-        dynamic_features.has_dynamic_vertex_input;
+    VideoCommon::Nx2FastDraw::g_dynamic_vertex_input.store(
+        dynamic_features.has_dynamic_vertex_input, std::memory_order_relaxed);
+    VideoCommon::Nx2FastDraw::g_dynamic_vertex_streams.store(
+        dynamic_features.has_dynamic_vertex_input && dynamic_features.has_extended_dynamic_state,
+        std::memory_order_relaxed);
 
     dynamic_features.has_provoking_vertex = device.IsExtProvokingVertexSupported();
     dynamic_features.has_provoking_vertex_first_mode =

@@ -375,7 +375,7 @@ bool Maxwell3D::IsFastDrawVertexFormat(u32 method) {
     // With dynamic vertex input only each attribute's type class is in the pipeline key, which
     // the reusable draw compares (TakeReusableDraw); the rest is recorded for every draw.
     constexpr u32 formats = MAXWELL3D_REG_INDEX(vertex_attrib_format);
-    return VideoCommon::Nx2FastDraw::g_vertex_streams_dynamic &&
+    return VideoCommon::Nx2FastDraw::g_dynamic_vertex_input.load(std::memory_order_relaxed) &&
            method >= formats && method < formats + Regs::NumVertexAttributes;
 }
 
@@ -418,8 +418,10 @@ bool Maxwell3D::IsFastDrawVertexBuffer(u32 method) {
     constexpr u32 streams = MAXWELL3D_REG_INDEX(vertex_streams);
     constexpr u32 stream_words = sizeof(Regs::VertexStream) / sizeof(u32);
     if (method >= streams && method < streams + Regs::NumVertexArrays * stream_words) {
+        // address_high and address_low; stride, enable and frequency where they are dynamic.
         const u32 word = (method - streams) % stream_words;
-        return word == 1 || word == 2; // address_high, address_low
+        return word == 1 || word == 2 ||
+               VideoCommon::Nx2FastDraw::g_dynamic_vertex_streams.load(std::memory_order_relaxed);
     }
     constexpr u32 sizes = 0x600 / sizeof(u32); // SET_VERTEX_STREAM_SIZE_A/B (NativeVertexStreamSize)
     constexpr u32 limits = MAXWELL3D_REG_INDEX(vertex_stream_limits);

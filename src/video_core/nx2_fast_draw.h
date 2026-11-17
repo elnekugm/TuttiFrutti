@@ -64,10 +64,15 @@ inline constexpr std::array<const char*, static_cast<size_t>(Reason::Count)> rea
 /// Read by every thread: on its own cache line, away from the serials the breaks bump.
 alignas(64) inline std::atomic<bool> g_enabled{true};
 
-/// Whether vertex stream strides and enables are dynamic state (extended dynamic state and
-/// dynamic vertex input): then no pipeline depends on them and they are draw parameters. Set by
-/// the pipeline cache before the GPU threads run, read on the back.
-inline bool g_vertex_streams_dynamic{};
+/// Whether pipelines take their vertex input as dynamic state (VK_EXT_vertex_input_dynamic_state):
+/// then the vertex attribute formats are draw parameters, as only each attribute's type class is
+/// in the pipeline key. Set by the pipeline cache before the GPU threads run, read on the back.
+inline std::atomic<bool> g_dynamic_vertex_input{};
+
+/// Whether vertex stream strides, enables and divisors are dynamic state too: dynamic vertex
+/// input with extended dynamic state keeps them out of the pipeline key, and UpdateVertexInput
+/// and the vertex buffer binds record them for every draw. Set with g_dynamic_vertex_input.
+inline std::atomic<bool> g_dynamic_vertex_streams{};
 
 /// Any thread: whether fast draws run (always, unless a test turned them off). The rasterizer
 /// latches it per draw (on the thread that draws) and starts with a full resolve when it turns on.
