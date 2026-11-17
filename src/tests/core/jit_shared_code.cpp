@@ -3,6 +3,8 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <optional>
@@ -53,8 +55,35 @@ constexpr u32 B(s32 offset) {
 constexpr u32 BNe(s32 offset) {
     return 0x54000001U | ((u32(offset / 4) & 0x7FFFF) << 5);
 }
+constexpr u32 Br(u32 rn) {
+    return 0xD61F0000U | (rn << 5);
+}
+constexpr u32 MovzHw(u32 rd, u32 imm16, u32 hw) {
+    return 0xD2800000U | (hw << 21) | ((imm16 & 0xFFFF) << 5) | rd;
+}
+constexpr u32 MovkHw(u32 rd, u32 imm16, u32 hw) {
+    return 0xF2800000U | (hw << 21) | ((imm16 & 0xFFFF) << 5) | rd;
+}
+
 
 using Code = std::map<u64, u32>;
+
+/// `blocks` blocks of `movz/movk x0, next; br x0`, then svc: every transition goes through the
+/// dispatcher (an indirect branch is never linked), so a Run does one shared-code lookup per
+/// block. Used by the benchmark to measure the lookup path with Run entry/exit amortized.
+Code IndirectChainProgram(u32 blocks) {
+    Code code;
+    constexpr u64 BlockSize = 12;
+    for (u32 i = 0; i < blocks; ++i) {
+        const u64 base = Entry + i * BlockSize;
+        const u64 next = i + 1 < blocks ? base + BlockSize : Entry + blocks * BlockSize;
+        code[base + 0] = MovzHw(9, u32(next & 0xFFFF), 0);
+        code[base + 4] = MovkHw(9, u32((next >> 16) & 0xFFFF), 1);
+        code[base + 8] = Br(9);
+    }
+    code[Entry + blocks * BlockSize] = Svc0;
+    return code;
+}
 
 /// x0 = iterations * (TPIDR_EL0 + [x4] + 1): TPIDR_EL0 and the load go to the running Jit's
 /// pointer and callbacks, and the +1 is a BL/RET pair.
@@ -101,11 +130,17 @@ public:
     /// Set when this Environment is destroyed, so a test can prove the order: shared code must
     /// not use it after that.
     std::atomic<bool>* destroyed = nullptr;
+    /// Blocks the JIT reported as compiled (UserCallbacks::BlockCompiled).
+    std::atomic<u64> block_compiled{0};
 
     ~Environment() override {
         if (destroyed != nullptr) {
             destroyed->store(true);
         }
+    }
+
+    void BlockCompiled(u64) override {
+        block_compiled.fetch_add(1, std::memory_order_relaxed);
     }
 
     std::optional<u32> MemoryReadCode(u64 address) override {
@@ -151,7 +186,8 @@ struct Core {
     std::optional<Jit> jit;
 
     Core(std::shared_ptr<SharedCodeCache> cache, std::shared_ptr<const Code> code, u8 index,
-         u32 code_cache_size = 64u << 20, u32 rsb_size = 32)
+         u32 code_cache_size = 64u << 20, u32 rsb_size = 32,
+         Dynarmic::OptimizationFlag optimizations = Dynarmic::all_safe_optimizations)
         : env{1000u * (index + 1u)}, tpidr_el0{10u * (index + 1u)} {
         env.code = std::move(code);
         Dynarmic::A64::UserConfig config;
@@ -165,6 +201,7 @@ struct Core {
         config.fast_dispatch_table_bits = 16;
         config.fast_dispatch_set_associative = true;
         config.rsb_size = rsb_size;
+        config.optimizations = optimizations;
         config.halt_check_on_back_edges = true;
         config.reuse_host_flags = true;
         config.host_call_return = true;
@@ -196,10 +233,11 @@ struct Core {
 
 std::vector<std::unique_ptr<Core>> MakeCores(size_t count, std::shared_ptr<SharedCodeCache> cache,
                                              std::shared_ptr<const Code> code,
-                                             u32 code_cache_size = 64u << 20) {
+                                             u32 code_cache_size = 64u << 20,
+                                             Dynarmic::OptimizationFlag optimizations = Dynarmic::all_safe_optimizations) {
     std::vector<std::unique_ptr<Core>> cores;
     for (size_t i = 0; i < count; ++i) {
-        cores.push_back(std::make_unique<Core>(cache, code, u8(i), code_cache_size));
+        cores.push_back(std::make_unique<Core>(cache, code, u8(i), code_cache_size, 32, optimizations));
     }
     return cores;
 }
@@ -405,5 +443,147 @@ TEST_CASE("A member Jit compiles after the founding Jit is destroyed", "[jit_sha
 // on Windows, so the failure path itself is not unit-tested; the invariant it protects (a joined
 // Jit registers every slot the shared code emits) is covered above. The non-shared path is the
 // plain literal emit, exercised by every existing test that uses a Jit without a shared cache.
+
+TEST_CASE("BlockCompiled runs once per compiled block, not per lookup", "[jit_shared_code]") {
+    const auto cache = std::make_shared<SharedCodeCache>();
+    const auto code = std::make_shared<const Code>(ChainProgram(8));
+    const auto cores = MakeCores(2, cache, code);
+    REQUIRE(cores[0]->RunProgram() == 8);
+    const u64 compiled = cores[0]->env.block_compiled.load();
+    REQUIRE(compiled > 0);
+    for (int round = 0; round < 5; ++round) {
+        REQUIRE(cores[0]->RunProgram() == 8);
+        REQUIRE(cores[0]->env.block_compiled.load() == compiled);
+    }
+}
+
+TEST_CASE("Invalidating while other Jits run the shared code", "[jit_shared_code]") {
+    const auto cache = std::make_shared<SharedCodeCache>();
+    const auto code = std::make_shared<const Code>(ChainProgram(400));
+    const auto cores = MakeCores(3, cache, code);
+    std::atomic<bool> stop{false};
+    std::vector<bool> ok(cores.size(), true);
+    std::vector<std::thread> runners;
+    for (size_t i = 0; i < cores.size(); ++i) {
+        runners.emplace_back([&, i] {
+            for (int round = 0; round < 25 && !stop.load(); ++round) {
+                ok[i] = ok[i] && cores[i]->RunProgram() == 400;
+            }
+        });
+    }
+    for (int i = 0; i < 200; ++i) {
+        cores[size_t(i) % cores.size()]->jit->InvalidateCacheRange(Entry, 0x1000);
+        std::this_thread::yield();
+    }
+    stop = true;
+    for (auto& runner : runners) {
+        runner.join();
+    }
+    for (size_t i = 0; i < cores.size(); ++i) {
+        INFO("core " << i);
+        REQUIRE(ok[i]);
+        REQUIRE_FALSE(cores[i]->env.unexpected);
+    }
+}
+
+TEST_CASE("Members join and leave while the shared code is used", "[jit_shared_code]") {
+    const auto cache = std::make_shared<SharedCodeCache>();
+    const auto code = std::make_shared<const Code>(ChainProgram(200));
+    Core resident{cache, code, 0};
+    std::atomic<bool> stop{false};
+    std::thread worker{[&] {
+        while (!stop.load()) {
+            resident.RunProgram();
+            resident.jit->InvalidateCacheRange(Entry, 0x1000);
+        }
+    }};
+    for (int i = 0; i < 20; ++i) {
+        auto member = std::make_unique<Core>(cache, code, 1);
+        REQUIRE(member->jit->SharesCode());
+        REQUIRE(member->RunProgram() == 200);
+        member.reset();
+    }
+    stop = true;
+    worker.join();
+    REQUIRE(cache->VerifyFailures() == 0);
+}
+
+// Run explicitly: tests.exe "[benchmark]". Each Jit runs one SVC block per Run, so each Run does
+// one shared-code lookup; FastDispatch is off so the lookup cannot be served by that table. The
+// locked mode is the pre-change path (every lookup takes compile_mutex).
+TEST_CASE("Shared code lookup throughput", "[.][benchmark]") {
+    const auto code = std::make_shared<const Code>(Code{{Entry, Svc0}});
+    const auto optimizations =
+        Dynarmic::all_safe_optimizations & ~Dynarmic::OptimizationFlag::FastDispatch;
+    const auto measure = [&](std::shared_ptr<SharedCodeCache> cache, int threads, int iterations) {
+        const auto cores = MakeCores(size_t(threads), cache, code, 64u << 20, optimizations);
+        for (const auto& core : cores) {
+            REQUIRE(core->RunProgram() == 0);
+        }
+        const auto start = std::chrono::steady_clock::now();
+        std::vector<std::thread> runners;
+        for (int t = 0; t < threads; ++t) {
+            runners.emplace_back([&, t] {
+                for (int i = 0; i < iterations; ++i) {
+                    cores[size_t(t)]->RunProgram();
+                }
+            });
+        }
+        for (auto& runner : runners) {
+            runner.join();
+        }
+        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count();
+        return double(ns) / (double(threads) * double(iterations));
+    };
+    for (int round = 0; round < 3; ++round) {
+        const double own = measure(nullptr, 4, 50'000);
+        const double locked = measure(std::make_shared<SharedCodeCache>(false, false, false), 4, 50'000);
+        const double fast = measure(std::make_shared<SharedCodeCache>(false, false, true), 4, 50'000);
+        std::printf("round %d: ns/lookup own=%.0f shared-locked=%.0f shared-fast=%.0f fast/locked=%.2fx\n",
+                    round, own, locked, fast, locked / fast);
+    }
+    SUCCEED();
+}
+
+// Same A/B, but each Run walks 256 indirect-branch blocks: one shared-code lookup per block, so
+// Run entry/exit is amortized and the number is the lookup path itself.
+TEST_CASE("Shared code dispatcher throughput", "[.][benchmark]") {
+    constexpr u32 Blocks = 256;
+    const auto code = std::make_shared<const Code>(IndirectChainProgram(Blocks));
+    const auto optimizations =
+        Dynarmic::all_safe_optimizations & ~Dynarmic::OptimizationFlag::FastDispatch;
+    const auto measure = [&](std::shared_ptr<SharedCodeCache> cache, int threads, int iterations) {
+        const auto cores = MakeCores(size_t(threads), cache, code, 64u << 20, optimizations);
+        for (const auto& core : cores) {
+            REQUIRE(core->RunProgram() == 0);
+        }
+        const auto start = std::chrono::steady_clock::now();
+        std::vector<std::thread> runners;
+        for (int t = 0; t < threads; ++t) {
+            runners.emplace_back([&, t] {
+                for (int i = 0; i < iterations; ++i) {
+                    cores[size_t(t)]->RunProgram();
+                }
+            });
+        }
+        for (auto& runner : runners) {
+            runner.join();
+        }
+        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count();
+        return double(ns) / (double(threads) * double(iterations) * double(Blocks + 1));
+    };
+    for (int round = 0; round < 3; ++round) {
+        const double own = measure(nullptr, 4, 4'000);
+        const double locked = measure(std::make_shared<SharedCodeCache>(false, false, false), 4, 4'000);
+        const double fast = measure(std::make_shared<SharedCodeCache>(false, false, true), 4, 4'000);
+        std::printf("round %d: ns/lookup (256 blocks) own=%.1f shared-locked=%.1f shared-fast=%.1f fast/locked=%.2fx\n",
+                    round, own, locked, fast, locked / fast);
+    }
+    SUCCEED();
+}
 
 #endif
