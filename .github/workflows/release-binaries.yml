@@ -745,7 +745,7 @@ jobs:
 
           Make the AppImage executable (\`chmod +x\`) and run it. It needs glibc 2.39 or newer
           (CachyOS, Arch, Ubuntu 24.04, Fedora 40, Debian 13) and a Vulkan driver. The AppImage
-          uses your normal profile under \`$XDG_DATA_HOME\` (usually \`~/.local/share/lichii\`).
+          uses your normal profile under \`\$XDG_DATA_HOME\` (usually \`~/.local/share/lichii\`).
           EOF
 
           gh release create "${tag}" dist/* \
