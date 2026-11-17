@@ -56,7 +56,7 @@ FP::FPCR A64EmitContext::FPCR(bool fpcr_controlled) const {
     return fpcr_controlled ? Location().FPCR() : Location().FPCR().ASIMDStandardValue();
 }
 
-A64EmitX64::A64EmitX64(BlockOfCode& code, A64::UserConfig conf, A64::Jit* jit_interface)
+A64EmitX64::A64EmitX64(BlockOfCode& code, A64::UserConfig conf, A64::Jit* jit_interface, A64::UserCallbacks* shared_callbacks)
         : EmitX64(code), conf(conf), jit_interface{jit_interface} {
     if (conf.HasOptimization(OptimizationFlag::FastDispatch)) {
         size_t bits = conf.fast_dispatch_table_bits != 0 ? conf.fast_dispatch_table_bits : default_fast_dispatch_table_bits;
@@ -66,10 +66,15 @@ A64EmitX64::A64EmitX64(BlockOfCode& code, A64::UserConfig conf, A64::Jit* jit_in
         fast_dispatch_table_mask = u32(((size_t(1) << bits) - 1) * sizeof(FastDispatchEntry)) & ~u32(fast_dispatch_set_size * sizeof(FastDispatchEntry) - 1);
     }
     if (code.SharedCode()) {
+        // The shared code never uses the founding Jit's callbacks: capture the thunks now, while
+        // that Jit is alive, and keep only their code addresses (CallbackArg).
+        ASSERT(shared_callbacks != nullptr);
+        ASSERT(conf.callbacks == nullptr);
+        CaptureSharedCallbacks(shared_callbacks);
         // Each Jit sharing the code has its own of these (A64JitState::per_core).
-        code.AddPerCoreValue(u64(&this->conf), A64JitState::PerCoreOffset(A64JitState::UserConfigSlot));
+        code.AddPerCoreValue(PerCoreSlot::UserConfig, A64JitState::PerCoreOffset(PerCoreSlot::UserConfig));
         if (!fast_dispatch_table.empty()) {
-            code.AddPerCoreValue(u64(fast_dispatch_table.data()), A64JitState::PerCoreOffset(A64JitState::FastDispatchTableSlot));
+            code.AddPerCoreValue(PerCoreSlot::FastDispatchTable, A64JitState::PerCoreOffset(PerCoreSlot::FastDispatchTable));
         }
     }
     code.elide_redundant_zext = conf.elide_redundant_zext;
@@ -90,6 +95,27 @@ A64EmitX64::A64EmitX64(BlockOfCode& code, A64::UserConfig conf, A64::Jit* jit_in
 }
 
 A64EmitX64::~A64EmitX64() = default;
+
+void A64EmitX64::CaptureSharedCallbacks(A64::UserCallbacks* callbacks) {
+    ASSERT(callbacks != nullptr);
+    // Every A64 callback whose thunk is emitted into a block. A new one must be added here: a
+    // shared-code site without a captured thunk asserts in CallbackArg.
+    CaptureSharedCallback<&A64::UserCallbacks::CallSVC>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::ExceptionRaised>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::DataCacheOperationRaised>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::InstructionCacheOperationRaised>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::InstructionSynchronizationBarrierRaised>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::GetCNTPCT>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::MemoryRead>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::MemoryWrite>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::MemoryRead128>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::MemoryWrite128>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::MemoryWriteExclusive8>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::MemoryWriteExclusive16>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::MemoryWriteExclusive32>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::MemoryWriteExclusive64>(callbacks);
+    CaptureSharedCallback<&A64::UserCallbacks::MemoryWriteExclusive128>(callbacks);
+}
 
 A64EmitX64::BlockDescriptor A64EmitX64::Emit(IR::Block& block) noexcept {
     if (conf.very_verbose_debugging_output) [[unlikely]] {
@@ -338,7 +364,7 @@ void A64EmitX64::GenTerminalHandlers() {
         check_halt();
         calculate_location_descriptor();
         code.L(rsb_cache_miss);
-        code.MovPerCore(r8, u64(fast_dispatch_table.data()));
+        code.MovPerCore(r8, PerCoreSlot::FastDispatchTable, u64(fast_dispatch_table.data()));
         //code.mov(r12, qword[code.ABI_JIT_PTR + offsetof(A64JitState, pc)]);
         code.mov(r12, rbx);
         if (code.HasHostFeature(HostFeature::SSE42)) {
@@ -695,7 +721,7 @@ void A64EmitX64::EmitA64CallSupervisor(A64EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
     ASSERT(args[0].IsImmediate());
     const u32 imm = args[0].GetImmediateU32();
-    Devirtualize<&A64::UserCallbacks::CallSVC>(conf.callbacks).EmitCall(code, [&](RegList param) {
+    CallbackArg<&A64::UserCallbacks::CallSVC>().EmitCall(code, [&](RegList param) {
         code.mov(param[0], imm);
     });
     // The kernel would have to execute ERET to get here, which would clear exclusive state.
@@ -708,7 +734,7 @@ void A64EmitX64::EmitA64ExceptionRaised(A64EmitContext& ctx, IR::Inst* inst) {
     ASSERT(args[0].IsImmediate() && args[1].IsImmediate());
     const u64 pc = args[0].GetImmediateU64();
     const u64 exception = args[1].GetImmediateU64();
-    Devirtualize<&A64::UserCallbacks::ExceptionRaised>(conf.callbacks).EmitCall(code, [&](RegList param) {
+    CallbackArg<&A64::UserCallbacks::ExceptionRaised>().EmitCall(code, [&](RegList param) {
         code.mov(param[0], pc);
         code.mov(param[1], exception);
     });
@@ -717,13 +743,13 @@ void A64EmitX64::EmitA64ExceptionRaised(A64EmitContext& ctx, IR::Inst* inst) {
 void A64EmitX64::EmitA64DataCacheOperationRaised(A64EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
     ctx.reg_alloc.HostCall(code, nullptr, {}, args[1], args[2]);
-    Devirtualize<&A64::UserCallbacks::DataCacheOperationRaised>(conf.callbacks).EmitCall(code);
+    CallbackArg<&A64::UserCallbacks::DataCacheOperationRaised>().EmitCall(code);
 }
 
 void A64EmitX64::EmitA64InstructionCacheOperationRaised(A64EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
     ctx.reg_alloc.HostCall(code, nullptr, {}, args[0], args[1]);
-    Devirtualize<&A64::UserCallbacks::InstructionCacheOperationRaised>(conf.callbacks).EmitCall(code);
+    CallbackArg<&A64::UserCallbacks::InstructionCacheOperationRaised>().EmitCall(code);
 }
 
 void A64EmitX64::EmitA64DataSynchronizationBarrier(A64EmitContext&, IR::Inst*) {
@@ -741,7 +767,7 @@ void A64EmitX64::EmitA64InstructionSynchronizationBarrier(A64EmitContext& ctx, I
     }
 
     ctx.reg_alloc.HostCall(code, nullptr);
-    Devirtualize<&A64::UserCallbacks::InstructionSynchronizationBarrierRaised>(conf.callbacks).EmitCall(code);
+    CallbackArg<&A64::UserCallbacks::InstructionSynchronizationBarrierRaised>().EmitCall(code);
 }
 
 void A64EmitX64::EmitA64GetCNTFRQ(A64EmitContext& ctx, IR::Inst* inst) {
@@ -755,7 +781,7 @@ void A64EmitX64::EmitA64GetCNTPCT(A64EmitContext& ctx, IR::Inst* inst) {
     if (!conf.wall_clock_cntpct) {
         code.UpdateTicks();
     }
-    Devirtualize<&A64::UserCallbacks::GetCNTPCT>(conf.callbacks).EmitCall(code);
+    CallbackArg<&A64::UserCallbacks::GetCNTPCT>().EmitCall(code);
 }
 
 void A64EmitX64::EmitA64GetCTR(A64EmitContext& ctx, IR::Inst* inst) {
@@ -773,7 +799,7 @@ void A64EmitX64::EmitA64GetDCZID(A64EmitContext& ctx, IR::Inst* inst) {
 void A64EmitX64::EmitA64GetTPIDR(A64EmitContext& ctx, IR::Inst* inst) {
     const Xbyak::Reg64 result = ctx.reg_alloc.ScratchGpr(code);
     if (conf.tpidr_el0) {
-        code.MovPerCore(result, u64(conf.tpidr_el0));
+        code.MovPerCore(result, PerCoreSlot::TpidrEl0, u64(conf.tpidr_el0));
         code.mov(result, qword[result]);
     } else {
         code.xor_(result.cvt32(), result.cvt32());
@@ -784,7 +810,7 @@ void A64EmitX64::EmitA64GetTPIDR(A64EmitContext& ctx, IR::Inst* inst) {
 void A64EmitX64::EmitA64GetTPIDRRO(A64EmitContext& ctx, IR::Inst* inst) {
     const Xbyak::Reg64 result = ctx.reg_alloc.ScratchGpr(code);
     if (conf.tpidrro_el0) {
-        code.MovPerCore(result, u64(conf.tpidrro_el0));
+        code.MovPerCore(result, PerCoreSlot::TpidrroEl0, u64(conf.tpidrro_el0));
         code.mov(result, qword[result]);
     } else {
         code.xor_(result.cvt32(), result.cvt32());
@@ -797,7 +823,7 @@ void A64EmitX64::EmitA64SetTPIDR(A64EmitContext& ctx, IR::Inst* inst) {
     const Xbyak::Reg64 value = ctx.reg_alloc.UseGpr(code, args[0]);
     const Xbyak::Reg64 addr = ctx.reg_alloc.ScratchGpr(code);
     if (conf.tpidr_el0) {
-        code.MovPerCore(addr, u64(conf.tpidr_el0));
+        code.MovPerCore(addr, PerCoreSlot::TpidrEl0, u64(conf.tpidr_el0));
         code.mov(qword[addr], value);
     }
 }

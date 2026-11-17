@@ -639,6 +639,18 @@ ArmDynarmic64::~ArmDynarmic64() {
     if (m_shared_code && m_core_index == 0) {
         LOG_INFO(Core_ARM, "Shared JIT code cache: {} full clears, {} blocks failed the check",
                  m_shared_code->Clears(), m_shared_code->VerifyFailures());
+        // EDEN_NX2_SHARED_JIT_STATS: lookups, hits, compiles and what GetSharedBlock waited for
+        // and held compile_mutex. Silent when statistics are off.
+        const auto stats = m_shared_code->GetStats();
+        if (stats.lookups != 0) {
+            LOG_INFO(Core_ARM,
+                     "Shared JIT code cache stats: lookups={} hits={} compiles={} hit_rate={:.1f}% "
+                     "wait={:.2f}ms hold={:.2f}ms max_wait={:.3f}ms",
+                     stats.lookups, stats.hits, stats.compiles,
+                     100.0 * double(stats.hits) / double(stats.lookups),
+                     double(stats.lock_wait_ns) / 1e6, double(stats.lock_hold_ns) / 1e6,
+                     double(stats.lock_max_wait_ns) / 1e6);
+        }
     }
 }
 
@@ -650,7 +662,9 @@ std::shared_ptr<Dynarmic::A64::SharedCodeCache> ArmDynarmic64::MakeSharedCodeCac
         return nullptr;
     }
     const char* const verify = std::getenv("EDEN_NX2_SHARED_JIT_VERIFY");
-    return std::make_shared<Dynarmic::A64::SharedCodeCache>(verify != nullptr && verify[0] == '1');
+    const char* const stats = std::getenv("EDEN_NX2_SHARED_JIT_STATS");
+    return std::make_shared<Dynarmic::A64::SharedCodeCache>(verify != nullptr && verify[0] == '1',
+                                                           stats != nullptr && stats[0] == '1');
 #else
     return nullptr;
 #endif

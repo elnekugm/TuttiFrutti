@@ -9,15 +9,19 @@
 #pragma once
 
 #include <array>
+#include <cstring>
 #include <map>
 #include <optional>
 #include <tuple>
+#include <vector>
+#include "common/assert.h"
 #include "common/container/unordered_map.h"
 #include "common/container/unordered_set.h"
 #include <boost/container/static_vector.hpp>
 
 #include "dynarmic/backend/block_range_information.h"
 #include "dynarmic/backend/x64/a64_jitstate.h"
+#include "dynarmic/backend/x64/devirtualize.h"
 #include "dynarmic/backend/x64/emit_x64.h"
 #include "dynarmic/backend/x64/reg_alloc.h"
 #include "dynarmic/frontend/A64/a64_location_descriptor.h"
@@ -49,7 +53,8 @@ struct A64EmitContext final : public EmitContext {
 
 class A64EmitX64 final : public EmitX64 {
 public:
-    A64EmitX64(BlockOfCode& code, A64::UserConfig conf, A64::Jit* jit_interface);
+    A64EmitX64(BlockOfCode& code, A64::UserConfig conf, A64::Jit* jit_interface,
+               A64::UserCallbacks* shared_callbacks = nullptr);
     ~A64EmitX64() override;
 
     /// Emit host machine code for a basic block with intermediate representation `block`.
@@ -131,6 +136,43 @@ public:
 
 //data
     const A64::UserConfig conf;
+    /// Shared code: the callback thunks, resolved while the founding Jit's callbacks were alive.
+    /// Emitted calls read the running Jit's callbacks pointer from its state, so only the code
+    /// address of each thunk is kept here, never that pointer.
+    struct SharedCallbackThunk {
+        std::array<u64, 2> key;  ///< mfp bytes: `mfp` is 8 or 16 bytes depending on the ABI
+        u64 fn{};
+    };
+    std::vector<SharedCallbackThunk> shared_callback_thunks;
+    template<auto mfp>
+    static std::array<u64, 2> CallbackKey() {
+        std::array<u64, 2> key{};
+        static_assert(sizeof(mfp) <= sizeof(key));
+        const auto value = mfp;  // `mfp` is a prvalue constant: copy it before taking its address
+        std::memcpy(key.data(), &value, sizeof(value));
+        return key;
+    }
+    void CaptureSharedCallbacks(A64::UserCallbacks* callbacks);
+    template<auto mfp>
+    void CaptureSharedCallback(A64::UserCallbacks* callbacks) {
+        shared_callback_thunks.push_back({CallbackKey<mfp>(), Devirtualize<mfp>(callbacks).fn_address()});
+    }
+    /// The ArgCallback of a user callback: in shared code, its thunk, captured at join time, and a
+    /// zero argument (the running Jit's callbacks pointer comes from its state).
+    template<auto mfp>
+    ArgCallback CallbackArg() const {
+        if (!code.SharedCode()) {
+            return Devirtualize<mfp>(conf.callbacks);
+        }
+        const std::array<u64, 2> key = CallbackKey<mfp>();
+        for (const SharedCallbackThunk& thunk : shared_callback_thunks) {
+            if (thunk.key == key) {
+                return ArgCallback(thunk.fn, 0, PerCoreSlot::Callbacks);
+            }
+        }
+        ASSERT_MSG(false, "shared code: callback thunk was not captured");
+        UNREACHABLE_MSG("shared code: callback thunk was not captured");
+    }
     RegAlloc reg_alloc; //reusable reg alloc
     BlockRangeInformation<u64> block_ranges;
     std::vector<FastDispatchEntry> fast_dispatch_table;

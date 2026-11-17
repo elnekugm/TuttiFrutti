@@ -39,7 +39,9 @@ class SharedCodeCache final {
 public:
     /// With verify, every block is checked for pointers of the Jit that compiled it, which the
     /// shared code must load from the running Jit instead (VerifyFailures counts the ones found).
-    explicit SharedCodeCache(bool verify = false);
+    /// With stats (EDEN_NX2_SHARED_JIT_STATS), block lookups and the time they wait for and hold
+    /// compile_mutex are counted.
+    explicit SharedCodeCache(bool verify = false, bool stats = false);
     ~SharedCodeCache();
 
     SharedCodeCache(const SharedCodeCache&) = delete;
@@ -49,6 +51,22 @@ public:
     std::size_t VerifyFailures() const;
     /// Whole-cache clears so far.
     std::size_t Clears() const;
+
+    /// What GetSharedBlock did, with stats: lookups, hits, compiles, and the time they spent
+    /// waiting for and holding compile_mutex. All zero when statistics are off.
+    struct Stats {
+        std::uint64_t lookups{};
+        std::uint64_t hits{};
+        std::uint64_t compiles{};
+        std::uint64_t lock_wait_ns{};
+        std::uint64_t lock_hold_ns{};
+        std::uint64_t lock_max_wait_ns{};
+    };
+    [[nodiscard]] Stats GetStats() const;
+
+    /// How many per-core slots the shared code reads from the running Jit (diagnostic: a joined
+    /// Jit registers all of them, so a shared-code site with an unregistered slot would assert).
+    [[nodiscard]] std::size_t RegisteredSlots() const;
 
     struct Impl;
     std::unique_ptr<Impl> impl;

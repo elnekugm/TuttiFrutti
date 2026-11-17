@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <iterator>
@@ -40,11 +41,26 @@ namespace Dynarmic::A64 {
 
 using namespace Backend::X64;
 
-static RunCodeCallbacks GenRunCodeCallbacks(A64::UserCallbacks* cb, CodePtr (*LookupBlock)(void* lookup_block_arg), void* arg, const A64::UserConfig& conf) {
+namespace {
+
+/// One clock for the optional shared-cache statistics.
+u64 NowNs() {
+    return u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+                   .count());
+}
+
+}  // namespace
+
+static RunCodeCallbacks GenRunCodeCallbacks(A64::UserCallbacks* cb, CodePtr (*LookupBlock)(void* lookup_block_arg), void* arg, const A64::UserConfig& conf, bool shared) {
+    const ArgCallback add_ticks = Devirtualize<&A64::UserCallbacks::AddTicks>(cb);
+    const ArgCallback ticks_remaining = Devirtualize<&A64::UserCallbacks::GetTicksRemaining>(cb);
+    // Shared code: the lookup and the callbacks belong to the Jit that runs the block, so only
+    // their slot is kept; the founding Jit's pointers are not stored in it.
     return RunCodeCallbacks{
-        ArgCallback(LookupBlock, reinterpret_cast<u64>(arg)),
-        ArgCallback(Devirtualize<&A64::UserCallbacks::AddTicks>(cb)),
-        ArgCallback(Devirtualize<&A64::UserCallbacks::GetTicksRemaining>(cb)),
+        ArgCallback(LookupBlock, shared ? 0 : reinterpret_cast<u64>(arg), PerCoreSlot::JitImpl),
+        ArgCallback(add_ticks.fn_address(), shared ? 0 : u64(cb), PerCoreSlot::Callbacks),
+        ArgCallback(ticks_remaining.fn_address(), shared ? 0 : u64(cb), PerCoreSlot::Callbacks),
         conf.enable_cycle_counting,
         HostCallReturn(conf) ? std::optional<u32>{u32(offsetof(A64JitState, host_stack_base))} : std::nullopt,
     };
@@ -88,10 +104,13 @@ static Optimization::PolyfillOptions GenPolyfillOptions(const BlockOfCode& code)
 
 /// The code, emitter and state of a SharedCodeCache, made by the first Jit that joins it.
 struct SharedCodeCache::Impl {
-    explicit Impl(bool verify)
-        : verify(verify) {}
+    Impl(bool verify, bool stats)
+        : verify(verify), stats(stats) {}
 
     const bool verify;
+    /// EDEN_NX2_SHARED_JIT_STATS: GetSharedBlock counts lookups, hits, compiles and the time it
+    /// waited for and held compile_mutex.
+    const bool stats;
 
     // Made by the first Jit (Jit::Impl::JoinShared), whose config builds the code.
     std::optional<UserConfig> conf;
@@ -117,10 +136,35 @@ struct SharedCodeCache::Impl {
 
     std::atomic<size_t> verify_failures{0};
     std::atomic<size_t> clears{0};
+
+    // EDEN_NX2_SHARED_JIT_STATS
+    std::atomic<u64> lookups{0};
+    std::atomic<u64> hits{0};
+    std::atomic<u64> compiles{0};
+    std::atomic<u64> lock_wait_ns{0};
+    std::atomic<u64> lock_hold_ns{0};
+    std::atomic<u64> lock_max_wait_ns{0};
+
+    void AddLockWait(u64 ns) {
+        lock_wait_ns.fetch_add(ns, std::memory_order_relaxed);
+        u64 last = lock_max_wait_ns.load(std::memory_order_relaxed);
+        while (ns > last && !lock_max_wait_ns.compare_exchange_weak(last, ns, std::memory_order_relaxed)) {
+        }
+    }
+    void AddLockHold(u64 ns) { lock_hold_ns.fetch_add(ns, std::memory_order_relaxed); }
+    void AddLookup(bool hit, u64 hold_ns) {
+        lookups.fetch_add(1, std::memory_order_relaxed);
+        if (hit) {
+            hits.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            compiles.fetch_add(1, std::memory_order_relaxed);
+        }
+        AddLockHold(hold_ns);
+    }
 };
 
-SharedCodeCache::SharedCodeCache(bool verify)
-        : impl(std::make_unique<Impl>(verify)) {}
+SharedCodeCache::SharedCodeCache(bool verify, bool stats)
+        : impl(std::make_unique<Impl>(verify, stats)) {}
 
 SharedCodeCache::~SharedCodeCache() = default;
 
@@ -130,6 +174,29 @@ std::size_t SharedCodeCache::VerifyFailures() const {
 
 std::size_t SharedCodeCache::Clears() const {
     return impl->clears.load(std::memory_order_relaxed);
+}
+
+SharedCodeCache::Stats SharedCodeCache::GetStats() const {
+    Stats stats;
+    stats.lookups = impl->lookups.load(std::memory_order_relaxed);
+    stats.hits = impl->hits.load(std::memory_order_relaxed);
+    stats.compiles = impl->compiles.load(std::memory_order_relaxed);
+    stats.lock_wait_ns = impl->lock_wait_ns.load(std::memory_order_relaxed);
+    stats.lock_hold_ns = impl->lock_hold_ns.load(std::memory_order_relaxed);
+    stats.lock_max_wait_ns = impl->lock_max_wait_ns.load(std::memory_order_relaxed);
+    return stats;
+}
+
+std::size_t SharedCodeCache::RegisteredSlots() const {
+    std::scoped_lock lock{impl->mutex};
+    if (!impl->code) {
+        return 0;
+    }
+    size_t registered = 0;
+    for (size_t slot = 0; slot < PerCoreSlotCount; ++slot) {
+        registered += impl->code->HasPerCoreSlot(PerCoreSlot(slot)) ? 1 : 0;
+    }
+    return registered;
 }
 
 namespace {
@@ -172,10 +239,10 @@ public:
     {
         ASSERT(conf.page_table_address_space_bits >= 12 && conf.page_table_address_space_bits <= 64);
         if (CanShareCode(conf)) {
-            JoinShared(jit);
+            JoinShared();
         }
         if (!shared) {
-            own_code = std::make_unique<BlockOfCode>(GenRunCodeCallbacks(conf.callbacks, &GetCurrentBlockThunk, this, conf), JitStateInfo{jit_state, RsbPtrMask(conf)}, conf.code_cache_size, GenRCP(conf));
+            own_code = std::make_unique<BlockOfCode>(GenRunCodeCallbacks(conf.callbacks, &GetCurrentBlockThunk, this, conf, false), JitStateInfo{jit_state, RsbPtrMask(conf)}, conf.code_cache_size, GenRCP(conf));
             own_emitter = std::make_unique<A64EmitX64>(*own_code, conf, jit);
             block_of_code = own_code.get();
             emitter = own_emitter.get();
@@ -511,35 +578,43 @@ private:
 
     /// Makes the shared code from this Jit's config if it is the first to join, else checks that
     /// its config can run that code. Leaves `shared` null when it can't.
-    void JoinShared(Jit* jit) {
+    void JoinShared() {
         SharedCodeCache::Impl& s = *conf.shared_code_cache->impl;
         std::scoped_lock lock{s.compile_mutex, s.mutex};
         if (!s.code) {
-            std::vector<PerCoreValue> values;
-            const auto add = [&values](u64 value, A64JitState::PerCoreSlot slot) {
-                if (value != 0) {
-                    values.push_back({value, A64JitState::PerCoreOffset(slot)});
-                }
+            std::vector<PerCoreRegistration> registrations;
+            const auto add = [&registrations](PerCoreSlot slot) {
+                registrations.push_back({slot, A64JitState::PerCoreOffset(slot)});
             };
-            add(u64(conf.callbacks), A64JitState::CallbacksSlot);
-            add(u64(this), A64JitState::JitImplSlot);
-            add(u64(conf.tpidr_el0), A64JitState::TpidrEl0Slot);
-            add(u64(conf.tpidrro_el0), A64JitState::TpidrroEl0Slot);
+            add(PerCoreSlot::Callbacks);
+            add(PerCoreSlot::JitImpl);
+            add(PerCoreSlot::TpidrEl0);
+            add(PerCoreSlot::TpidrroEl0);
             if (conf.global_monitor) {
-                add(u64(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)), A64JitState::ExclusiveAddressSlot);
-                add(u64(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)), A64JitState::ExclusiveValueSlot);
+                add(PerCoreSlot::ExclusiveAddress);
+                add(PerCoreSlot::ExclusiveValue);
             }
+            // The shared state keeps what shapes code generation, never the founding Jit's
+            // callbacks: a member may compile after this Jit is destroyed, and the emitted calls
+            // read the running Jit's callbacks from its state instead.
             s.conf = conf;
+            s.conf->callbacks = nullptr;
             s.conf->shared_code_cache.reset();  // the cache holds its own config: no cycle
-            s.code = std::make_unique<BlockOfCode>(GenRunCodeCallbacks(conf.callbacks, &GetCurrentBlockThunk, this, *s.conf), JitStateInfo{jit_state, RsbPtrMask(conf)}, conf.code_cache_size, GenRCP(*s.conf), true, std::move(values));
-            s.emitter = std::make_unique<A64EmitX64>(*s.code, *s.conf, jit);
+            s.code = std::make_unique<BlockOfCode>(GenRunCodeCallbacks(conf.callbacks, &GetCurrentBlockThunk, this, conf, true), JitStateInfo{jit_state, RsbPtrMask(conf)}, conf.code_cache_size, GenRCP(conf), true, std::move(registrations));
+            s.emitter = std::make_unique<A64EmitX64>(*s.code, *s.conf, nullptr, conf.callbacks);
             s.polyfill_options = GenPolyfillOptions(*s.code);
-            // The exclusive monitor clear embeds every processor's address slot, the founder's too.
-            const u32 exclusive_address = A64JitState::PerCoreOffset(A64JitState::ExclusiveAddressSlot);
-            for (const PerCoreValue& value : s.code->PerCoreValues()) {
-                if (value.offset != exclusive_address) {
-                    s.founder_values.push_back(value.value);
-                }
+            // Pointers a block must never embed (verify). Not the callbacks pointer: emitted calls
+            // load it from the running Jit. Not the exclusive address slots: the monitor clear
+            // embeds every processor's and skips the running one at run time.
+            s.founder_values.push_back(u64(this));
+            if (conf.tpidr_el0) {
+                s.founder_values.push_back(u64(conf.tpidr_el0));
+            }
+            if (conf.tpidrro_el0) {
+                s.founder_values.push_back(u64(conf.tpidrro_el0));
+            }
+            if (conf.global_monitor) {
+                s.founder_values.push_back(u64(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
             }
             SharedCodeCache::Impl* const s_ptr = &s;
             s.emitter->request_invalidation = [s_ptr](IR::LocationDescriptor location) {
@@ -556,18 +631,18 @@ private:
         if (conf.HasOptimization(OptimizationFlag::FastDispatch)) {
             fast_dispatch_table.resize(emitter->fast_dispatch_table.size());
         }
-        const auto set = [this](A64JitState::PerCoreSlot slot, u64 value) {
-            jit_state.per_core[slot] = value;
+        const auto set = [this](PerCoreSlot slot, u64 value) {
+            jit_state.per_core[size_t(slot)] = value;
         };
-        set(A64JitState::CallbacksSlot, u64(conf.callbacks));
-        set(A64JitState::JitImplSlot, u64(this));
-        set(A64JitState::UserConfigSlot, u64(&conf));
-        set(A64JitState::TpidrEl0Slot, u64(conf.tpidr_el0));
-        set(A64JitState::TpidrroEl0Slot, u64(conf.tpidrro_el0));
-        set(A64JitState::FastDispatchTableSlot, u64(fast_dispatch_table.data()));
+        set(PerCoreSlot::Callbacks, u64(conf.callbacks));
+        set(PerCoreSlot::JitImpl, u64(this));
+        set(PerCoreSlot::UserConfig, u64(&conf));
+        set(PerCoreSlot::TpidrEl0, u64(conf.tpidr_el0));
+        set(PerCoreSlot::TpidrroEl0, u64(conf.tpidrro_el0));
+        set(PerCoreSlot::FastDispatchTable, u64(fast_dispatch_table.data()));
         if (conf.global_monitor) {
-            set(A64JitState::ExclusiveAddressSlot, u64(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
-            set(A64JitState::ExclusiveValueSlot, u64(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
+            set(PerCoreSlot::ExclusiveAddress, u64(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
+            set(PerCoreSlot::ExclusiveValue, u64(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
         }
         s.members.push_back(this);
         seen_epoch = s.epoch;
@@ -680,25 +755,47 @@ private:
     }
 
     CodePtr GetSharedBlock(IR::LocationDescriptor descriptor) {
-        CodePtr entrypoint;
+        // EDEN_NX2_SHARED_JIT_STATS: one branch per lookup, nothing when off.
+        const bool stats = shared->stats;
+        const u64 wait_begin = stats ? NowNs() : 0;
+        CodePtr entrypoint = nullptr;
+        bool hit = false;
         {
             std::unique_lock compile_lock{shared->compile_mutex};
+            u64 hold_begin = 0;
+            if (stats) {
+                hold_begin = NowNs();
+                shared->AddLockWait(hold_begin - wait_begin);
+            }
             // Cleared at most once, like the private cache: after that the block is compiled anyway.
             bool cleared = false;
             while (true) {
                 if (auto block = emitter->GetBasicBlock(descriptor)) {
-                    return block->entrypoint;
+                    entrypoint = block->entrypoint;
+                    hit = true;
+                    break;
                 }
                 if (cleared || block_of_code->SpaceRemaining() >= MINIMUM_REMAINING_CODESIZE) {
                     break;
                 }
+                if (stats) {
+                    shared->AddLockHold(NowNs() - hold_begin);
+                }
                 compile_lock.unlock();
                 ClearSharedFromInside();
                 compile_lock.lock();
+                if (stats) {
+                    hold_begin = NowNs();
+                }
                 cleared = true;
             }
-            block_of_code->EnsureMemoryCommitted(MINIMUM_REMAINING_CODESIZE);
-            entrypoint = CompileBlock(descriptor, false);
+            if (entrypoint == nullptr) {
+                block_of_code->EnsureMemoryCommitted(MINIMUM_REMAINING_CODESIZE);
+                entrypoint = CompileBlock(descriptor, false);
+            }
+            if (stats) {
+                shared->AddLookup(hit, NowNs() - hold_begin);
+            }
         }
         conf.callbacks->BlockCompiled(descriptor.Value());
         return entrypoint;

@@ -15,6 +15,7 @@
 
 #include "dynarmic/backend/x64/abi.h"
 #include "dynarmic/backend/x64/nzcv_util.h"
+#include "dynarmic/backend/x64/per_core_slot.h"
 #include "dynarmic/backend/x64/stack_layout.h"
 #include "dynarmic/frontend/A64/a64_location_descriptor.h"
 
@@ -74,17 +75,6 @@ struct A64JitState {
 
     // UserConfig::shared_code_cache: this Jit's own values of the pointers the shared code loads
     // instead of embedding them (BlockOfCode::MovPerCore), by PerCoreSlot.
-    enum PerCoreSlot : size_t {
-        CallbacksSlot,
-        JitImplSlot,
-        UserConfigSlot,
-        TpidrEl0Slot,
-        TpidrroEl0Slot,
-        FastDispatchTableSlot,
-        ExclusiveAddressSlot,
-        ExclusiveValueSlot,
-        PerCoreSlotCount,
-    };
     std::array<u64, PerCoreSlotCount> per_core{};
     static constexpr u32 PerCoreOffset(PerCoreSlot slot);
 
@@ -118,7 +108,7 @@ struct A64JitState {
 #endif
 
 constexpr u32 A64JitState::PerCoreOffset(PerCoreSlot slot) {
-    return u32(offsetof(A64JitState, per_core) + slot * sizeof(u64));
+    return u32(offsetof(A64JitState, per_core) + size_t(slot) * sizeof(u64));
 }
 
 using CodePtr = const void*;

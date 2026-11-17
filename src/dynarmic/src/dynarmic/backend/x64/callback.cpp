@@ -23,17 +23,17 @@ void SimpleCallback::EmitCallWithReturnPointer(BlockOfCode& code, std::function<
 
 void ArgCallback::EmitCall(BlockOfCode& code, std::function<void(RegList)> l) const {
     l({code.ABI_PARAM2, code.ABI_PARAM3, code.ABI_PARAM4});
-    code.MovPerCore(code.ABI_PARAM1, arg);
+    code.MovPerCore(code.ABI_PARAM1, slot, arg);
     code.CallFunction(fn);
 }
 
 void ArgCallback::EmitCallWithReturnPointer(BlockOfCode& code, std::function<void(Xbyak::Reg64, RegList)> l) const {
 #if defined(WIN32) && !defined(__MINGW64__)
     l(code.ABI_PARAM2, {code.ABI_PARAM3, code.ABI_PARAM4});
-    code.MovPerCore(code.ABI_PARAM1, arg);
+    code.MovPerCore(code.ABI_PARAM1, slot, arg);
 #else
     l(code.ABI_PARAM1, {code.ABI_PARAM3, code.ABI_PARAM4});
-    code.MovPerCore(code.ABI_PARAM2, arg);
+    code.MovPerCore(code.ABI_PARAM2, slot, arg);
 #endif
     code.CallFunction(fn);
 }

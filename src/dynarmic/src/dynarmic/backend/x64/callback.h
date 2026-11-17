@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "dynarmic/backend/x64/per_core_slot.h"
 #include "dynarmic/backend/x64/xbyak.h"
 
 namespace Dynarmic::Backend::X64 {
@@ -49,18 +50,23 @@ private:
 
 class ArgCallback final : public Callback {
 public:
+    /// `slot` names the per-core value the call's object pointer is: shared code loads the running
+    /// Jit's, never the founding Jit's.
     template<typename Function>
-    ArgCallback(Function fn, u64 arg)
-            : fn(reinterpret_cast<void (*)()>(fn)), arg(arg) {}
+    ArgCallback(Function fn, u64 arg, PerCoreSlot slot = PerCoreSlot::Callbacks)
+            : fn(reinterpret_cast<void (*)()>(fn)), arg(arg), slot(slot) {}
 
     using Callback::EmitCall;
 
     void EmitCall(BlockOfCode& code, std::function<void(RegList)> fn) const override;
     void EmitCallWithReturnPointer(BlockOfCode& code, std::function<void(Xbyak::Reg64, RegList)> fn) const override;
 
+    [[nodiscard]] u64 fn_address() const { return reinterpret_cast<u64>(fn); }
+
 private:
     void (*fn)();
     u64 arg;
+    PerCoreSlot slot;
 };
 
 }  // namespace Dynarmic::Backend::X64

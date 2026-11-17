@@ -395,9 +395,8 @@ void EmitExclusiveTestAndClear(BlockOfCode& code, const UserConfig& conf, Xbyak:
     code.mov(tmp, 0xDEAD'DEAD'DEAD'DEAD);
     const size_t processor_count = GetExclusiveMonitorProcessorCount(conf.global_monitor);
     // Shared code runs on every processor: it skips the running one's monitor at run time.
-    const std::optional<u32> own_monitor = code.SharedCode()
-        ? code.PerCoreOffset(std::bit_cast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)))
-        : std::nullopt;
+    const std::optional<u32> own_monitor =
+        code.SharedCode() ? code.PerCoreOffset(PerCoreSlot::ExclusiveAddress) : std::nullopt;
     ASSERT(!code.SharedCode() || own_monitor);
     for (size_t processor_index = 0; processor_index < processor_count; processor_index++) {
         if (!own_monitor && processor_index == conf.processor_id) {

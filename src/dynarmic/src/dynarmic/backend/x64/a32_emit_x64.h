@@ -18,6 +18,7 @@
 
 #include "dynarmic/backend/block_range_information.h"
 #include "dynarmic/backend/x64/a32_jitstate.h"
+#include "dynarmic/backend/x64/devirtualize.h"
 #include "dynarmic/backend/x64/emit_x64.h"
 #include "dynarmic/backend/x64/reg_alloc.h"
 #include "dynarmic/frontend/A32/a32_location_descriptor.h"
@@ -128,6 +129,12 @@ public:
     void EmitPatchMovRcx(CodePtr target_code_ptr = nullptr) override;
 
     const A32::UserConfig conf;
+    /// The ArgCallback of a user callback. A32 code is never shared, so it always embeds the
+    /// callbacks pointer; the hook exists for the common memory emitters.
+    template<auto mfp>
+    ArgCallback CallbackArg() const {
+        return Devirtualize<mfp>(conf.callbacks);
+    }
     RegAlloc reg_alloc; //reusable reg alloc
     BlockRangeInformation<u32> block_ranges;
     std::array<FastDispatchEntry, fast_dispatch_table_size> fast_dispatch_table;

@@ -171,7 +171,7 @@ bool IsUnderRosetta() {
 }  // anonymous namespace
 
 BlockOfCode::BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_code_size, std::function<void(BlockOfCode&)> rcp,
-                         bool shared_code, std::vector<PerCoreValue> per_core)
+                         bool shared_code, std::vector<PerCoreRegistration> per_core)
     : Xbyak::CodeGenerator(total_code_size
 #ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
         , Xbyak::DontSetProtectRWE
@@ -183,8 +183,10 @@ BlockOfCode::BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_cod
     , jsi(jsi)
     , cb(std::move(cb))
     , shared_code(shared_code)
-    , per_core_values(std::move(per_core))
 {
+    for (const PerCoreRegistration& registration : per_core) {
+        AddPerCoreValue(registration.slot, registration.offset);
+    }
 #ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
     // Other Jits run the code while one writes to it: no W^X switching.
     ASSERT(!shared_code);
@@ -192,6 +194,22 @@ BlockOfCode::BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_cod
     EnableWriting();
     EnsureMemoryCommitted(PRELUDE_COMMIT_SIZE);
     GenRunCode(rcp);
+}
+
+void BlockOfCode::MovPerCore(const Xbyak::Reg64& reg, PerCoreSlot slot, u64 value) {
+    if (!shared_code) {
+        mov(reg, value);
+        return;
+    }
+    const std::optional<u32> offset = PerCoreOffset(slot);
+    ASSERT_MSG(offset.has_value(), "shared code uses per-core slot {} that no Jit registered",
+               size_t(slot));
+    if (!offset) {
+        // The soft assert continues: stop here rather than emit the founding Jit's value, which
+        // would run the block with another Jit's state.
+        UNREACHABLE_MSG("shared code uses an unregistered per-core slot {}", size_t(slot));
+    }
+    mov(reg, qword[ABI_JIT_PTR + *offset]);
 }
 
 bool BlockOfCode::HasHostFeature(HostFeature feature) const noexcept {
