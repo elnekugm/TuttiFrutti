@@ -527,15 +527,15 @@ jobs:
           # Portable profile: this folder beside lichii.exe keeps the config, saves and cache
           # here, and the first start offers to import the previous profile.
           New-Item -ItemType Directory -Force build/release/bin/user | Out-Null
-          Set-Content -Path build/release/bin/user/LEEME.txt -Encoding utf8 -Value @'
-TuttiFrutti portable / portátil
-
-Esta carpeta "user" guarda la configuración, partidas, NAND y caché del emulador aquí,
-junto a lichii.exe, en vez de en %APPDATA%\lichii.
-
-This "user" folder keeps the emulator's config, saves, NAND and cache here next to
-lichii.exe instead of in %APPDATA%\lichii. Delete or rename it to use the normal profile.
-'@
+          @(
+            'TuttiFrutti portable / portátil',
+            '',
+            'Esta carpeta "user" guarda la configuración, partidas, NAND y caché del emulador aquí,',
+            'junto a lichii.exe, en vez de en %APPDATA%\lichii.',
+            '',
+            'This "user" folder keeps the emulator config, saves, NAND and cache here next to',
+            'lichii.exe instead of in %APPDATA%\lichii. Delete or rename it to use the normal profile.'
+          ) | Set-Content -Path build/release/bin/user/LEEME.txt -Encoding utf8
           if (Get-ChildItem -Recurse build/release/bin -Filter 'GFSDK_*') {
             throw 'build/release/bin holds Nsight Aftermath files, which must not ship'
           }
