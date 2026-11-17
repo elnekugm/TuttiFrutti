@@ -169,8 +169,14 @@ jobs:
             sudo tee /etc/apt/sources.list.d/llvm.list > /dev/null
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            "clang-$PGO_LLVM_VERSION" "lld-$PGO_LLVM_VERSION"
+            "clang-$PGO_LLVM_VERSION" "lld-$PGO_LLVM_VERSION" "llvm-$PGO_LLVM_VERSION"
           "clang-$PGO_LLVM_VERSION" --version
+          for tool in llvm-ar llvm-ranlib ld.lld; do
+            if [ ! -x "/usr/lib/llvm-$PGO_LLVM_VERSION/bin/$tool" ]; then
+              echo "::error::missing /usr/lib/llvm-$PGO_LLVM_VERSION/bin/$tool"
+              exit 1
+            fi
+          done
 
       # The profiles are in the source tree, where the Linux and Windows configure steps read them.
       - name: Check PGO profile
