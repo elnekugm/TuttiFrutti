@@ -343,4 +343,54 @@ TEST_CASE("Invalidating a range recompiles it for every Jit sharing the code",
     }
 }
 
+TEST_CASE("A joined Jit registers every per-core slot its shared code reads",
+          "[jit_shared_code]") {
+    const auto cache = std::make_shared<SharedCodeCache>();
+    const auto code = std::make_shared<const Code>(LoopProgram(1));
+    Core core{cache, code, 0};
+    REQUIRE(core.jit->SharesCode());
+    // Callbacks, JitImpl, UserConfig, TpidrEl0, TpidrroEl0 and the fast dispatch table. The
+    // exclusive monitor slots are absent: this config has no global_monitor.
+    REQUIRE(cache->RegisteredSlots() == 6);
+}
+
+TEST_CASE("A member Jit compiles after the founding Jit is destroyed", "[jit_shared_code]") {
+    // The shared code must not keep the founding Jit's callbacks pointer: on an Itanium ABI
+    // Devirtualize reads the object's vtable, so a member that compiles after that object is
+    // destroyed would read freed memory. Only code addresses captured at join time survive.
+    const auto cache = std::make_shared<SharedCodeCache>(true, true);
+    const auto chain = std::make_shared<const Code>(ChainProgram(64));
+    std::unique_ptr<Core> member;
+    {
+        Core founder{cache, chain, 0};
+        REQUIRE(founder.jit->SharesCode());
+        REQUIRE(founder.RunProgram() == 64);
+        member = std::make_unique<Core>(cache, chain, 1);
+        REQUIRE(member->jit->SharesCode());
+        REQUIRE(member->RunProgram() == 64);
+    }
+    // The founder's callbacks, UserConfig, TPIDR_EL0, fast dispatch table and Jit::Impl are gone.
+    member->env.code = std::make_shared<const Code>(LoopProgram(7));
+    member->jit->InvalidateCacheRange(Entry, 0x1000);
+    const u64 compiles_before = cache->GetStats().compiles;
+    REQUIRE(member->RunProgram() == member->LoopResult(7));
+    REQUIRE_FALSE(member->env.unexpected);
+    REQUIRE(cache->GetStats().compiles > compiles_before);
+    REQUIRE(cache->VerifyFailures() == 0);
+
+    // The counters the statistics were added for: a lookup per block dispatch, hits after the
+    // first compile, and a bounded hold of compile_mutex.
+    const auto stats = cache->GetStats();
+    REQUIRE(stats.lookups > 0);
+    REQUIRE(stats.hits > 0);
+    REQUIRE(stats.compiles > 0);
+    REQUIRE(stats.lock_hold_ns > 0);
+}
+
+// A shared-code site whose per-core slot was never registered fails in BlockOfCode::MovPerCore
+// with ASSERT_MSG followed by UNREACHABLE_MSG. That aborts the process, which Catch2 cannot catch
+// on Windows, so the failure path itself is not unit-tested; the invariant it protects (a joined
+// Jit registers every slot the shared code emits) is covered above. The non-shared path is the
+// plain literal emit, exercised by every existing test that uses a Jit without a shared cache.
+
 #endif
