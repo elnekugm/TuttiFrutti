@@ -40,8 +40,10 @@ public:
     /// With verify, every block is checked for pointers of the Jit that compiled it, which the
     /// shared code must load from the running Jit instead (VerifyFailures counts the ones found).
     /// With stats (EDEN_NX2_SHARED_JIT_STATS), block lookups and the time they wait for and hold
-    /// compile_mutex are counted.
-    explicit SharedCodeCache(bool verify = false, bool stats = false);
+    /// compile_mutex are counted. With fast_lookup (default), a Jit answers repeated lookups from
+    /// its own table and reads the shared block index without compile_mutex, so hits do not
+    /// serialize the cores; false keeps the pre-change path where every lookup takes it.
+    explicit SharedCodeCache(bool verify = false, bool stats = false, bool fast_lookup = true);
     ~SharedCodeCache();
 
     SharedCodeCache(const SharedCodeCache&) = delete;

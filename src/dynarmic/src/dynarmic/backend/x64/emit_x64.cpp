@@ -51,6 +51,10 @@ EmitX64::EmitX64(BlockOfCode& code)
 EmitX64::~EmitX64() = default;
 
 std::optional<EmitX64::BlockDescriptor> EmitX64::GetBasicBlock(IR::LocationDescriptor descriptor) const {
+    std::shared_lock index_lock{block_index_mutex, std::defer_lock};
+    if (code.SharedCode()) {
+        index_lock.lock();
+    }
     const auto iter = block_descriptors.find(descriptor);
     if (iter == block_descriptors.end()) {
         return std::nullopt;
@@ -383,7 +387,13 @@ EmitX64::BlockDescriptor EmitX64::RegisterBlock(const IR::LocationDescriptor& de
     Patch(descriptor, entrypoint);
 
     BlockDescriptor block_desc{entrypoint, size};
-    block_descriptors.insert({IR::LocationDescriptor{descriptor.Value()}, block_desc});
+    {
+        std::unique_lock index_lock{block_index_mutex, std::defer_lock};
+        if (code.SharedCode()) {
+            index_lock.lock();
+        }
+        block_descriptors.insert({IR::LocationDescriptor{descriptor.Value()}, block_desc});
+    }
     return block_desc;
 }
 
@@ -497,6 +507,10 @@ void EmitX64::Unpatch(const IR::LocationDescriptor& target_desc) {
 }
 
 void EmitX64::ClearCache() {
+    std::unique_lock index_lock{block_index_mutex, std::defer_lock};
+    if (code.SharedCode()) {
+        index_lock.lock();
+    }
     block_descriptors.clear();
     patch_information.clear();
 
@@ -504,6 +518,10 @@ void EmitX64::ClearCache() {
 }
 
 void EmitX64::InvalidateBasicBlocks(const ::Common::unordered_set<IR::LocationDescriptor>& locations) {
+    std::unique_lock index_lock{block_index_mutex, std::defer_lock};
+    if (code.SharedCode()) {
+        index_lock.lock();
+    }
     code.EnableWriting();
     for (const auto& descriptor : locations) {
         if (auto const it = block_descriptors.find(descriptor); it != block_descriptors.end()) {

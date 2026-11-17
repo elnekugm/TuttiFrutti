@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -104,13 +105,15 @@ static Optimization::PolyfillOptions GenPolyfillOptions(const BlockOfCode& code)
 
 /// The code, emitter and state of a SharedCodeCache, made by the first Jit that joins it.
 struct SharedCodeCache::Impl {
-    Impl(bool verify, bool stats)
-        : verify(verify), stats(stats) {}
+    Impl(bool verify, bool stats, bool fast_lookup)
+        : verify(verify), stats(stats), fast_lookup(fast_lookup) {}
 
     const bool verify;
     /// EDEN_NX2_SHARED_JIT_STATS: GetSharedBlock counts lookups, hits, compiles and the time it
     /// waited for and held compile_mutex.
     const bool stats;
+    /// Lookups use the per-Jit table and the shared index read lock instead of compile_mutex.
+    const bool fast_lookup;
 
     // Made by the first Jit (Jit::Impl::JoinShared), whose config builds the code.
     std::optional<UserConfig> conf;
@@ -163,8 +166,8 @@ struct SharedCodeCache::Impl {
     }
 };
 
-SharedCodeCache::SharedCodeCache(bool verify, bool stats)
-        : impl(std::make_unique<Impl>(verify, stats)) {}
+SharedCodeCache::SharedCodeCache(bool verify, bool stats, bool fast_lookup)
+        : impl(std::make_unique<Impl>(verify, stats, fast_lookup)) {}
 
 SharedCodeCache::~SharedCodeCache() = default;
 
@@ -752,14 +755,41 @@ private:
         seen_epoch = shared->epoch;
         jit_state.ResetRSB();
         std::fill(fast_dispatch_table.begin(), fast_dispatch_table.end(), A64EmitX64::FastDispatchEntry{});
+        std::fill(shared_lookup.begin(), shared_lookup.end(), SharedLookupEntry{});
     }
 
     CodePtr GetSharedBlock(IR::LocationDescriptor descriptor) {
         // EDEN_NX2_SHARED_JIT_STATS: one branch per lookup, nothing when off.
         const bool stats = shared->stats;
+        const u64 location = descriptor.Value();
+
+        // Hits: this Jit's own table, no lock and no shared state. An entry is valid only while
+        // the epoch it was filled in is current. An invalidation or clear waits for every Jit to
+        // leave the code (inside == 0) before it runs, and that happens after this Run returns;
+        // the next Enter then fails SyncSharedEpoch and empties this table.
+        if (shared->fast_lookup) {
+            const SharedLookupEntry& cached = shared_lookup[SharedLookupIndex(location)];
+            if (cached.code != nullptr && cached.location == location && cached.epoch == seen_epoch) {
+                if (stats) {
+                    shared->AddLookup(true, 0);
+                }
+                return cached.code;
+            }
+            // The shared index under a read lock: block lookups on different Jits no longer
+            // serialize on compile_mutex. Entries are only erased while no Jit runs the code.
+            if (const auto block = emitter->GetBasicBlock(descriptor)) {
+                shared_lookup[SharedLookupIndex(location)] = {location, block->entrypoint, seen_epoch};
+                if (stats) {
+                    shared->AddLookup(true, 0);
+                }
+                return block->entrypoint;
+            }
+        }
+
+        // Miss: compile, exclusively, after re-checking (another Jit may have compiled it).
         const u64 wait_begin = stats ? NowNs() : 0;
         CodePtr entrypoint = nullptr;
-        bool hit = false;
+        bool compiled = false;
         {
             std::unique_lock compile_lock{shared->compile_mutex};
             u64 hold_begin = 0;
@@ -772,7 +802,6 @@ private:
             while (true) {
                 if (auto block = emitter->GetBasicBlock(descriptor)) {
                     entrypoint = block->entrypoint;
-                    hit = true;
                     break;
                 }
                 if (cleared || block_of_code->SpaceRemaining() >= MINIMUM_REMAINING_CODESIZE) {
@@ -792,12 +821,20 @@ private:
             if (entrypoint == nullptr) {
                 block_of_code->EnsureMemoryCommitted(MINIMUM_REMAINING_CODESIZE);
                 entrypoint = CompileBlock(descriptor, false);
+                compiled = true;
             }
             if (stats) {
-                shared->AddLookup(hit, NowNs() - hold_begin);
+                shared->AddLookup(!compiled, NowNs() - hold_begin);
             }
         }
-        conf.callbacks->BlockCompiled(descriptor.Value());
+        if (shared->fast_lookup) {
+            shared_lookup[SharedLookupIndex(location)] = {location, entrypoint, seen_epoch};
+        }
+        // Only a block compiled here is news to the warm-up: one that already existed was recorded
+        // when it was compiled (by this Jit or another), and its lock on every lookup is not free.
+        if (compiled) {
+            conf.callbacks->BlockCompiled(location);
+        }
         return entrypoint;
     }
 
@@ -833,6 +870,22 @@ private:
     SharedCodeCache::Impl* shared = nullptr;
     std::vector<A64EmitX64::FastDispatchEntry> fast_dispatch_table;  ///< Shared code: this Jit's
     u64 seen_epoch = 0;
+
+    /// Shared code, fast lookups: a direct-mapped map from block location to its code, filled by
+    /// lookups and by compiles, tagged with the epoch it was filled in. Only this Jit's thread
+    /// touches it, so a hit costs no lock and no shared state. It is emptied by SyncSharedEpoch,
+    /// and an entry whose epoch is not current is ignored.
+    struct SharedLookupEntry {
+        u64 location = ~u64{0};
+        CodePtr code = nullptr;
+        u64 epoch = 0;
+    };
+    static constexpr size_t SharedLookupBits = 12;
+    static constexpr size_t SharedLookupSize = size_t{1} << SharedLookupBits;
+    static size_t SharedLookupIndex(u64 location) {
+        return size_t((location * 0x9E37'79B9'7F4A'7C15ull) >> (64 - SharedLookupBits));
+    }
+    std::array<SharedLookupEntry, SharedLookupSize> shared_lookup{};
 };
 
 Jit::Jit(UserConfig conf)

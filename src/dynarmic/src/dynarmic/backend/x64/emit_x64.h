@@ -149,6 +149,10 @@ public:
     ExceptionHandler exception_handler;
     ::Common::unordered_map<IR::LocationDescriptor, BlockDescriptor> block_descriptors;
     ::Common::unordered_map<IR::LocationDescriptor, PatchInformation> patch_information;
+    /// Shared code: lookups read block_descriptors under this shared lock while a compile inserts
+    /// and an invalidation or clear erases. Writers hold compile_mutex too, so a lookup that
+    /// reads without the compile lock cannot see a half-applied invalidation.
+    mutable std::shared_mutex block_index_mutex;
     /// Shared code: guards the fastmem tables against another Jit's thread in the fault handler.
     mutable std::shared_mutex fastmem_mutex;
     /// Shared code: recompiles a block once no Jit runs the code; the fault handler can't

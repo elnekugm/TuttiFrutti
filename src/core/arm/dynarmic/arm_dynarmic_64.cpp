@@ -663,8 +663,12 @@ std::shared_ptr<Dynarmic::A64::SharedCodeCache> ArmDynarmic64::MakeSharedCodeCac
     }
     const char* const verify = std::getenv("EDEN_NX2_SHARED_JIT_VERIFY");
     const char* const stats = std::getenv("EDEN_NX2_SHARED_JIT_STATS");
-    return std::make_shared<Dynarmic::A64::SharedCodeCache>(verify != nullptr && verify[0] == '1',
-                                                           stats != nullptr && stats[0] == '1');
+    // EDEN_NX2_SHARED_JIT_FASTLOOKUP=0 keeps the pre-change lookup path (every lookup takes the
+    // compile mutex), for A/B comparisons.
+    const char* const fast_lookup = std::getenv("EDEN_NX2_SHARED_JIT_FASTLOOKUP");
+    return std::make_shared<Dynarmic::A64::SharedCodeCache>(
+        verify != nullptr && verify[0] == '1', stats != nullptr && stats[0] == '1',
+        fast_lookup == nullptr || fast_lookup[0] != '0');
 #else
     return nullptr;
 #endif
