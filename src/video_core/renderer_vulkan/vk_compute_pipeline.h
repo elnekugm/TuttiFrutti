@@ -6,6 +6,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -33,6 +34,7 @@ namespace Vulkan {
 
 class Device;
 class PipelineBinaries;
+class PipelineCache;
 class PipelineStatistics;
 class Scheduler;
 
@@ -61,12 +63,22 @@ public:
 
     using BindCommand = std::function<void(vk::CommandBuffer)>;
 
-    [[nodiscard]] bool Configure(Tegra::Engines::KeplerCompute& kepler_compute,
-                                 Tegra::MemoryManager& gpu_memory, Scheduler& scheduler,
-                                 BufferCache& buffer_cache, TextureCache& texture_cache,
-                                 TextureCacheRuntime& texture_runtime,
-                                 std::optional<ByteAddressedShadow>& shadow,
-                                 BindCommand* deferred_bind = nullptr);
+    enum class ConfigureResult {
+        Ready,
+        Failed,
+        /// The pipeline is still building and the dispatch is skipped
+        /// (PipelineCache::SkipUnbuiltDispatch); nothing was bound or marked written.
+        Skipped,
+    };
+
+    [[nodiscard]] ConfigureResult Configure(Tegra::Engines::KeplerCompute& kepler_compute,
+                                            Tegra::MemoryManager& gpu_memory,
+                                            Scheduler& scheduler, BufferCache& buffer_cache,
+                                            TextureCache& texture_cache,
+                                            TextureCacheRuntime& texture_runtime,
+                                            PipelineCache& pipelines,
+                                            std::optional<ByteAddressedShadow>& shadow,
+                                            BindCommand* deferred_bind = nullptr);
 
     /// Whether the bindings fit an Ocarina upscale pass: one written image, no other writes.
     [[nodiscard]] bool CanReplaceOcarinaUpscale() const;
@@ -84,6 +96,10 @@ public:
     [[nodiscard]] bool IsBuilt() const noexcept {
         return is_built.load(std::memory_order_acquire);
     }
+
+    /// Raises its build to NeedNow and waits up to `timeout` for it.
+    /// @return True when the pipeline is built.
+    [[nodiscard]] bool WaitBuilt(std::chrono::microseconds timeout);
 
     /// The SPIR-V (zstd) the pipeline was built from; read it only once IsBuilt().
     [[nodiscard]] const std::vector<u8>& KeptSpirv() const noexcept {

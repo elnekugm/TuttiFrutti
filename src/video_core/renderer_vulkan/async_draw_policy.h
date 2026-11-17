@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 
 #include "common/common_types.h"
@@ -12,7 +13,8 @@ namespace Vulkan {
 /// shaders) instead of waiting for the build.
 /// Native draws without depth always wait because they may populate persistent textures.
 /// @param native         The draw comes from a Switch 2 (native Turing macro) program.
-/// @param depth_enabled  The depth test is on for the draw.
+/// @param depth_enabled  The depth test is on for the draw. For a native draw also: it writes color
+///                       into a render target 0 first written in an earlier frame.
 /// @param index_count    Index count of the draw.
 /// @param vertex_count   Vertex count of the draw.
 /// @param discard_native Allow skipping depth-tested native draws (EDEN_NX2_ASYNC_DISCARD=1).
@@ -54,6 +56,24 @@ constexpr NativeDrawAction DecideNativePending(NativePendingMode mode, bool can_
         return NativeDrawAction::Skip;
     }
     return NativeDrawAction::WaitTimed;
+}
+
+/// Waits for a pending pipeline at most what is left of this frame's wait budget, and takes the
+/// time spent from it.
+/// @param budget_left_us Microseconds left of this frame's wait budget.
+/// @param used_us        Adds the time spent, for the log.
+/// @param wait_for       Waits up to the given time for the build; true once it is built.
+/// @return True when the pipeline is built.
+template <typename WaitFor>
+bool WaitWithinBudget(s64& budget_left_us, s64& used_us, WaitFor&& wait_for) {
+    const auto begin = std::chrono::steady_clock::now();
+    const bool built = wait_for(std::chrono::microseconds{budget_left_us});
+    const s64 spent = std::chrono::duration_cast<std::chrono::microseconds>(
+                          std::chrono::steady_clock::now() - begin)
+                          .count();
+    budget_left_us -= spent;
+    used_us += spent;
+    return built;
 }
 
 } // namespace Vulkan
