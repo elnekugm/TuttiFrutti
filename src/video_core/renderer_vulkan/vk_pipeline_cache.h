@@ -145,11 +145,12 @@ public:
 
     /// Whether a Switch 2 dispatch whose compute pipeline is still building is skipped instead
     /// of waiting for the build, as native_async_draws decides for draws. Skipping leaves the
-    /// dispatch's outputs as they are, which costs a frame of its work only when the GPU wrote
-    /// them before (a pass the game runs every frame); otherwise they would keep whatever the
-    /// guest left there, so those dispatches wait. A Bounded wait takes from the draws' budget.
-    /// @param outputs_hold_gpu_data Every buffer range and image the dispatch writes holds GPU
-    ///                              writes already.
+    /// dispatch's outputs as they are, which costs a frame of its work only when shaders wrote
+    /// them before (a pass the game runs every frame); otherwise they would keep a clear value
+    /// or whatever the guest left there, so those dispatches wait. A Bounded wait takes from the
+    /// draws' budget.
+    /// @param outputs_hold_gpu_data Every buffer byte the dispatch writes holds GPU writes, and
+    ///                              every image level it writes holds storage writes.
     [[nodiscard]] bool SkipUnbuiltDispatch(ComputePipeline& pipeline, bool outputs_hold_gpu_data);
 
     void LoadDiskResources(u64 title_id, std::stop_token stop_loading,

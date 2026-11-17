@@ -309,6 +309,13 @@ public:
     /// Mark an image as modified from the GPU
     void MarkModification(ImageId id) noexcept;
 
+    /// Mark the image behind a view a shader writes through as a storage image
+    void MarkStorageWrite(ImageViewId id) noexcept;
+
+    /// Whether a view's image is absent or holds a shader's storage writes over every level it
+    /// covers, with nothing newer (no clear, render pass, copy or CPU write since).
+    [[nodiscard]] bool StorageViewHoldsShaderWrites(ImageViewId id) const noexcept;
+
     /// Fill image_view_ids with the graphics/compute images in indices
     void FillImageViews(std::span<ImageViewInOut> views, bool compute, bool blacklist = true);
 

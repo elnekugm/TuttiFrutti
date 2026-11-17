@@ -872,6 +872,24 @@ void TextureCache<P>::MarkModification(ImageId id) noexcept {
 }
 
 template <class P>
+void TextureCache<P>::MarkStorageWrite(ImageViewId id) noexcept {
+    const ImageViewBase& view = slot_image_views[id];
+    if (!view.image_id) {
+        return;
+    }
+    ImageBase& image = slot_images[view.image_id];
+    const u32 levels_before = image.storage_written_levels;
+    MarkModification(image);
+    NoteStorageWrite(image, levels_before, view.range);
+}
+
+template <class P>
+bool TextureCache<P>::StorageViewHoldsShaderWrites(ImageViewId id) const noexcept {
+    const ImageViewBase& view = slot_image_views[id];
+    return !view.image_id || HoldsStorageWrites(slot_images[view.image_id], view.range);
+}
+
+template <class P>
 bool TextureCache<P>::PublishComputeCollisionImage(u32 index) {
     const auto view_id = VisitImageView(index, true);
     if (!view_id || !slot_image_views[view_id].image_id) {
@@ -4587,6 +4605,7 @@ void TextureCache<P>::RemoveFramebuffers(std::span<const ImageViewId> removed_vi
 template <class P>
 void TextureCache<P>::MarkModification(ImageBase& image) noexcept {
     image.flags |= ImageFlagBits::GpuModified;
+    image.storage_written_levels = 0;
     SetModificationTick(slot_images, image, ++modification_tick);
 }
 
@@ -4629,6 +4648,7 @@ void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
     }
     SetModificationTick(slot_images, image, most_recent_tick);
     image.newest_alias_tick = most_recent_tick;
+    image.storage_written_levels = 0;
     if (any_modified) {
         image.flags |= ImageFlagBits::GpuModified;
     }

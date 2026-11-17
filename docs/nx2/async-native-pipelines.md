@@ -24,10 +24,13 @@ something once would lose it for the session.
 - A draw may be skipped only when it is depth-tested, writes color, is not a mesh draw, and its
   render target 0 was first written in an earlier frame (Eglantine #874). Mario Kart World bakes
   terrain once with depth-tested draws; Star Fox draws each font glyph once without depth.
-- A dispatch (`PipelineCache::SkipUnbuiltDispatch`) may be skipped only when every buffer range it
-  would mark written already holds GPU writes and every storage image it writes is GPU-modified.
-  Its outputs then hold an earlier dispatch's results; otherwise they would keep what the guest
-  left there, which later work might read as counts or indices.
+- A dispatch (`PipelineCache::SkipUnbuiltDispatch`) may be skipped only when every byte of every
+  buffer range it would mark written already holds GPU writes (a DMA clear or CPU write removes
+  them), and every storage image level it writes was last written by a shader through a storage
+  view, over every layer (`ImageBase::storage_written_levels`; a clear, render pass, copy, alias
+  copy or CPU write resets it). Its outputs then hold earlier shader results; otherwise they would
+  keep a clear value or what the guest left there, which later work might read as counts or
+  indices.
 
 Bounded waits for a skippable draw or dispatch up to what is left of `native_pipeline_wait_ms` this
 frame, then skips. Everything else waits for its build on the Vulkan worker, as before.

@@ -680,14 +680,12 @@ ComputePipeline::ConfigureResult ComputePipeline::Configure(
 
     // Decided before the bindings below mark the outputs GPU-written.
     if (!is_built.load(std::memory_order::relaxed) && kepler_compute.IsNativeMode()) {
-        const bool images_hold_gpu_data =
+        const bool images_hold_shader_writes =
             std::ranges::all_of(written_images, [&](VideoCommon::ImageViewId id) {
-                const Image* const image = texture_cache.GetImageView(id).BackingImage();
-                return image == nullptr ||
-                       True(image->flags & VideoCommon::ImageFlagBits::GpuModified);
+                return texture_cache.StorageViewHoldsShaderWrites(id);
             });
         if (pipelines.SkipUnbuiltDispatch(
-                *this, images_hold_gpu_data && buffer_cache.ComputeWritesHoldGpuData())) {
+                *this, images_hold_shader_writes && buffer_cache.ComputeWritesHoldGpuData())) {
             return ConfigureResult::Skipped;
         }
     }
@@ -792,8 +790,7 @@ ComputePipeline::ConfigureResult ComputePipeline::Configure(
         for (const auto& desc : info.image_descriptors) {
             for (u32 i = 0; i < desc.count; ++i, ++image_index) {
                 if (desc.is_written) {
-                    texture_cache.MarkModification(
-                        texture_cache.GetImageView(views[image_index].id).image_id);
+                    texture_cache.MarkStorageWrite(views[image_index].id);
                 }
             }
         }

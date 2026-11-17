@@ -2690,8 +2690,8 @@ bool PipelineCache::SkipUnbuiltDispatch(ComputePipeline& pipeline, bool outputs_
     case NativeDrawAction::Wait:
         if (mode != NativePendingMode::Wait) {
             LOG_INFO(Render_Vulkan,
-                     "Compute pipeline {:016x} is still building: its dispatch waits, nothing on "
-                     "the GPU has written its outputs yet",
+                     "Compute pipeline {:016x} is still building: its dispatch waits, its outputs "
+                     "hold no earlier shader results",
                      pipeline.ShaderHash());
         }
         return false;

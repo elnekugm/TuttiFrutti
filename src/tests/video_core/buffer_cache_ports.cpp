@@ -1372,7 +1372,10 @@ TEST_CASE("A dispatch's outputs hold GPU data once the GPU wrote every range it 
     REQUIRE(f.cache->ComputeWritesHoldGpuData());
     Access::ComputeStorage(*f.cache, channel, 1, binding(0x11000, 0x100), true);
     REQUIRE_FALSE(f.cache->ComputeWritesHoldGpuData());
-    Access::MarkWritten(*f.cache, id, 0x11000, 0x100);
+    // Part of the range is not enough: the rest still holds what the guest left there.
+    Access::MarkWritten(*f.cache, id, 0x11000, 0x40);
+    REQUIRE_FALSE(f.cache->ComputeWritesHoldGpuData());
+    Access::MarkWritten(*f.cache, id, 0x11040, 0xc0);
     REQUIRE(f.cache->ComputeWritesHoldGpuData());
     // A native binding counts as far as the dispatch marks it written.
     Access::ComputeStorage(*f.cache, channel, 2, binding(0x12000, 0x1000), true, true, 0x40);
