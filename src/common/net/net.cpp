@@ -88,15 +88,23 @@ std::vector<Asset> Release::GetPlatformAssets(std::string_view platform,
         platform.remove_suffix(4);
     }
 
+    // The CPU target is part of the asset name, not of the OS and architecture.
+    std::string_view base = platform;
+    if (base.ends_with("-znver3")) {
+        base.remove_suffix(7);
+    } else if (base.ends_with("-v3")) {
+        base.remove_suffix(3);
+    }
+
     std::vector<std::string_view> extensions;
-    if (platform == "linux-x86_64" || platform == "linux-aarch64") {
+    if (base == "linux-x86_64" || base == "linux-aarch64") {
         if (package != LinuxPackage::Archive) {
             extensions.push_back(".AppImage");
         }
         if (package != LinuxPackage::AppImage) {
             extensions.push_back(".tar.gz");
         }
-    } else if (platform == "windows-x86_64" || (platform == "macos-arm64" && !pgo)) {
+    } else if (base == "windows-x86_64" || (base == "macos-arm64" && !pgo)) {
         extensions = {".zip"};
     } else {
         return {};

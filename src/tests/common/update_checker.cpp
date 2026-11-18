@@ -40,10 +40,20 @@ TEST_CASE("TuttiFrutti updates compare build numbers, not tag strings", "[update
     CHECK_FALSE(UpdateChecker::SelectUpdate({}, "build-70", "windows-x86_64"));
 }
 
+TEST_CASE("TuttiFrutti compares dotted release versions", "[updater]") {
+    const auto releases = std::array{MakeRelease("build-1.1", "TuttiFrutti-windows-x86_64.zip")};
+    const auto update = UpdateChecker::SelectUpdate(releases, "build-1", "windows-x86_64");
+    REQUIRE(update);
+    CHECK(update->tag == "build-1.1");
+    CHECK_FALSE(UpdateChecker::SelectUpdate(releases, "build-1.1", "windows-x86_64"));
+    CHECK_FALSE(UpdateChecker::SelectUpdate(releases, "build-1.2", "windows-x86_64"));
+}
+
 TEST_CASE("TuttiFrutti ignores dev builds and malformed release tags", "[updater]") {
     const std::string tag =
         GENERATE("", "nx2", "v0.2.0", "abc123-nx2", "nx2-build-71", "build-", "build-0", "build--1",
-                 "build-+71", "build-71junk", "build- 71", "build-18446744073709551616");
+                 "build-+71", "build-71junk", "build- 71", "build-18446744073709551616",
+                 "build-18446744073709551615.1", "build-1.", "build-1.1.2");
     const auto releases = std::array{MakeRelease("build-71", "TuttiFrutti-windows-x86_64.zip")};
     CHECK_FALSE(UpdateChecker::SelectUpdate(releases, tag, "windows-x86_64"));
     auto invalid = releases;
@@ -97,6 +107,37 @@ TEST_CASE("TuttiFrutti selects only the matching platform and PGO variant", "[up
           "/elnekugm/TuttiFrutti/releases/download/build-71/" + selected[0].filename);
     CHECK_FALSE(release.GetPlatformAssets("android-arm64").size());
     CHECK_FALSE(release.GetPlatformAssets("").size());
+}
+
+TEST_CASE("TuttiFrutti finds the CPU-target asset", "[updater]") {
+    const auto windows =
+        MakeRelease("build-1.1", "TuttiFrutti-windows-x86_64-znver3-pgo.zip");
+    const auto windows_assets = windows.GetPlatformAssets("windows-x86_64-znver3-pgo");
+    REQUIRE(windows_assets.size() == 1);
+    CHECK(windows_assets[0].filename == "TuttiFrutti-windows-x86_64-znver3-pgo.zip");
+
+    const auto linux =
+        MakeRelease("build-1.1", "TuttiFrutti-linux-x86_64-znver3-pgo.AppImage");
+    const auto linux_assets = linux.GetPlatformAssets("linux-x86_64-znver3-pgo");
+    REQUIRE(linux_assets.size() == 1);
+    CHECK(linux_assets[0].filename == "TuttiFrutti-linux-x86_64-znver3-pgo.AppImage");
+
+    // The explicit CPU target is part of the asset name on both platforms.
+    const auto v3_named = MakeRelease("build-1.1", "TuttiFrutti-windows-x86_64-v3-pgo.zip");
+    const auto v3_named_assets = v3_named.GetPlatformAssets("windows-x86_64-v3-pgo");
+    REQUIRE(v3_named_assets.size() == 1);
+    CHECK(v3_named_assets[0].filename == "TuttiFrutti-windows-x86_64-v3-pgo.zip");
+
+    const auto v3_linux = MakeRelease("build-1.1", "TuttiFrutti-linux-x86_64-v3-pgo.AppImage");
+    const auto v3_linux_assets = v3_linux.GetPlatformAssets("linux-x86_64-v3-pgo");
+    REQUIRE(v3_linux_assets.size() == 1);
+    CHECK(v3_linux_assets[0].filename == "TuttiFrutti-linux-x86_64-v3-pgo.AppImage");
+
+    // The plain v3 name stays valid, and a znver3 release does not answer it.
+    const auto v3 = MakeRelease("build-1.1", "TuttiFrutti-windows-x86_64-pgo.zip");
+    CHECK(v3.GetPlatformAssets("windows-x86_64-pgo")[0].filename ==
+          "TuttiFrutti-windows-x86_64-pgo.zip");
+    CHECK(v3.GetPlatformAssets("windows-x86_64-znver3-pgo").empty());
 }
 
 TEST_CASE("TuttiFrutti skips releases without its asset and falls back to Linux archives", "[updater]") {

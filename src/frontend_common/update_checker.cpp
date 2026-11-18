@@ -6,6 +6,7 @@
 // Refer to the license.txt file included.
 
 #include <charconv>
+#include <limits>
 #include "common/logging.h"
 #include "common/scm_rev.h"
 #include "frontend_common/update_checker.h"
@@ -22,10 +23,27 @@ std::optional<u64> ParseBuildNumber(std::string_view tag) {
     tag.remove_prefix(prefix.size());
     u64 number{};
     const auto [end, error] = std::from_chars(tag.data(), tag.data() + tag.size(), number);
-    if (error != std::errc{} || end != tag.data() + tag.size() || number == 0) {
+    if (error != std::errc{} || end == tag.data() || number == 0) {
         return std::nullopt;
     }
-    return number;
+    if (end == tag.data() + tag.size()) {
+        return number;
+    }
+    // build-1.1 is build 1, minor 1; it sorts after build-1 and before build-2.
+    if (*end != '.') {
+        return std::nullopt;
+    }
+    u64 minor{};
+    const auto [minor_end, minor_error] =
+        std::from_chars(end + 1, tag.data() + tag.size(), minor);
+    if (minor_error != std::errc{} || minor_end != tag.data() + tag.size()) {
+        return std::nullopt;
+    }
+    constexpr u64 max = std::numeric_limits<u64>::max();
+    if (number > (max - minor) / 1000) {
+        return std::nullopt;
+    }
+    return number * 1000 + minor;
 }
 
 } // namespace
