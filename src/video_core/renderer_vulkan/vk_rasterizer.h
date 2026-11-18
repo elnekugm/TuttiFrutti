@@ -429,6 +429,13 @@ private:
     bool mesh_arena_used{};
     void ReleaseMeshEmulationBuffers();
 
+    using TextureRegisters = std::array<u32, 7>;
+    [[nodiscard]] static TextureRegisters ReadTextureRegisters(const Maxwell& regs) noexcept {
+        return {regs.tex_header.address_high,  regs.tex_header.address_low,
+                regs.tex_header.limit,         regs.tex_sampler.address_high,
+                regs.tex_sampler.address_low,  regs.tex_sampler.limit,
+                static_cast<u32>(regs.sampler_binding)};
+    }
     /// Fast draw (nx2_fast_draw.h): what the last recorded draw left bound.
     struct ReusableDraw {
         GraphicsPipeline* pipeline{};
@@ -437,6 +444,8 @@ private:
         u64 map_serial{};
         u64 tick{};
         u64 render_pass{};
+        u64 generation{};
+        TextureRegisters texture_registers{};
         Maxwell::PrimitiveTopology topology{};
         bool is_indexed{};
     };
@@ -503,6 +512,9 @@ private:
     /// Whether the draw TakeReusableDraw took still holds once the caches are locked (serial and
     /// map_serial as read then), and the images it samples need no preparing.
     bool DeltaStillHolds(u64 serial, u64 map_serial);
+    /// Whether `pipeline` can keep what it resolved at its own last recorded draw, reading its
+    /// texture handles again. Sets taken_draw, taken_retexture and taken_revisit.
+    bool RevisitDraw(GraphicsPipeline* pipeline, bool is_indirect);
     void NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_indexed, bool is_indirect, u64 serial,
                           u64 map_serial);
     void ReportFastDraws();
@@ -535,6 +547,17 @@ private:
         handle_spans;
     /// The constant buffer binds and data since the previous draw.
     VideoCommon::Nx2FastDraw::Delta taken_delta;
+    /// The draw TakeReusableDraw took can keep its views by re-reading only the handles that
+    /// changed (RetextureDelta); DeltaStillHolds resolves them once the caches are locked.
+    bool taken_retexture{};
+    /// The draw keeps what its pipeline resolved at its own last recorded draw (RevisitDraw).
+    bool taken_revisit{};
+    /// Each pipeline's last recorded draw, direct-mapped by its address.
+    std::array<ReusableDraw, 256> revisit_draws{};
+    [[nodiscard]] static size_t RevisitSlot(const GraphicsPipeline* pipeline) noexcept {
+        return static_cast<size_t>((reinterpret_cast<uintptr_t>(pipeline) >> 4) *
+                                   0x9E3779B97F4A7C15ULL >> 56);
+    }
     /// taken_delta hasn't reached BeginGraphicsUniforms yet (the draw may still stop before).
     bool taken_delta_unconsumed{};
     /// Constant buffer data since the last BeginGraphicsUniforms that no delta it got holds.

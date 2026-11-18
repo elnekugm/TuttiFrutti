@@ -743,6 +743,7 @@ template <typename Spec>
 bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     boost::container::small_vector<VideoCommon::ImageViewInOut, 160> views;
     boost::container::small_vector<VideoCommon::SamplerId, 96> samplers;
+    boost::container::small_vector<u32, 160> raw_handles;
     boost::container::small_vector<ComputedHandle, 16> computed_handles;
     boost::container::small_vector<u32, 64> computed_values;
     views.reserve(num_image_elements);
@@ -889,6 +890,9 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         const auto add_image{[&](const auto& desc, bool blacklist) LAMBDA_FORCEINLINE {
             for (u32 index = 0; index < desc.count; ++index) {
                 const auto handle{read_handle(desc, index)};
+                if (capture_delta) {
+                    raw_handles.push_back(handle.first);
+                }
                 views.push_back({
                     .index = handle.first,
                     .blacklist = blacklist,
@@ -920,6 +924,9 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                         info, desc.handle_program, *gpu_memory, cbuf_address,
                         device.GetStorageBufferAlignment(), desc.count, [&](u32 element, u32 raw) {
                             note_computed(desc, element, raw);
+                            if (capture_delta) {
+                                raw_handles.push_back(raw);
+                            }
                             const auto handle{TexturePair(raw, via_header_index)};
                             views.push_back({handle.first});
                             if (handle.second != last_sampler_index) {
@@ -943,6 +950,9 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                     const auto handle{VideoCommon::HandleIsStoragePointer(info, desc, index)
                                           ? VideoCommon::NULL_TEXTURE_HANDLE
                                           : read_handle(desc, index)};
+                    if (capture_delta) {
+                        raw_handles.push_back(handle.first);
+                    }
                     views.push_back({handle.first});
 
                     VideoCommon::SamplerId sampler{texture_cache.GetSamplerId(handle.second, false)};
@@ -1078,11 +1088,17 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         }
         delta_views.assign(views.begin(), views.end());
         delta_samplers.assign(samplers.begin(), samplers.end());
+        if (raw_handles.size() == views.size()) {
+            delta_raw_handles.assign(raw_handles.begin(), raw_handles.end());
+        } else {
+            delta_raw_handles.clear();
+        }
         delta_computed_handles.assign(computed_handles.begin(), computed_handles.end());
         delta_computed_values.assign(computed_values.begin(), computed_values.end());
         configured_stages = Spec::enabled_stages;
         delta_views_valid = true;
         kept_images_valid = false;
+        NextDeltaGeneration();
     }
     if (captured_delta) {
         kept_image_entries.clear();
@@ -1310,6 +1326,101 @@ bool GraphicsPipeline::ComputedHandlesChanged() const {
         }
     }
     return false;
+}
+
+bool GraphicsPipeline::SharesDeltaStateWith(const GraphicsPipeline& other) const noexcept {
+    return false;
+}
+
+void GraphicsPipeline::TakeDeltaStateFrom(GraphicsPipeline& other) noexcept {}
+
+bool GraphicsPipeline::ReadRawHandles(std::vector<u32>& out, std::vector<u32>* computed) const {
+    if (computed != nullptr || num_image_elements != num_textures || delta_blocker != DeltaBlocker::None) {
+        return false;
+    }
+    out.clear();
+    for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+        if (!configured_stages[stage]) {
+            continue;
+        }
+        const Shader::Info& info{stage_infos[stage]};
+        const auto& cbufs{maxwell3d->state.shader_stages[stage].const_buffers};
+        for (const auto& desc : info.texture_descriptors) {
+            if (desc.handle_program != ~0U || desc.has_secondary) {
+                return false;
+            }
+            for (u32 index = 0; index < desc.count; ++index) {
+                if (VideoCommon::HandleIsStoragePointer(info, desc, index)) {
+                    out.push_back(~0U);
+                    continue;
+                }
+                if (!cbufs[desc.cbuf_index].enabled) {
+                    return false;
+                }
+                out.push_back(gpu_memory->Read<u32>(cbufs[desc.cbuf_index].address +
+                                                    desc.cbuf_offset + (index << desc.size_shift)));
+            }
+        }
+    }
+    return out.size() == delta_views.size();
+}
+
+std::optional<u32> GraphicsPipeline::RetextureDelta() {
+    if (!CanRetexture() || delta_raw_handles.size() != delta_views.size() ||
+        delta_raw_handles.size() != delta_views.size()) {
+        return std::nullopt;
+    }
+    retexture_handles.clear();
+    if (!ReadRawHandles(retexture_handles)) {
+        return std::nullopt;
+    }
+    small_vector<u32, 16> changed;
+    small_vector<u32, 16> raws;
+    for (u32 element = 0; element < retexture_handles.size(); ++element) {
+        if (retexture_handles[element] != delta_raw_handles[element]) {
+            changed.push_back(element);
+            raws.push_back(retexture_handles[element]);
+        }
+    }
+    retexture_handles.clear();
+    if (changed.empty()) {
+        return 0U;
+    }
+    if (!ResolveChangedViews(std::span(changed.data(), changed.size()),
+                             std::span(raws.data(), raws.size()))) {
+        return std::nullopt;
+    }
+    return static_cast<u32>(changed.size());
+}
+
+std::optional<u32> GraphicsPipeline::RetextureComputed() {
+    return std::nullopt;
+}
+
+bool GraphicsPipeline::ResolveChangedViews(std::span<const u32> elements,
+                                           std::span<const u32> raws) {
+    const bool via_header_index{maxwell3d->regs.sampler_binding ==
+                                Maxwell::SamplerBinding::ViaHeaderBinding};
+    const u64 serial = VideoCommon::Nx2FastDraw::Serial();
+    small_vector<VideoCommon::ImageViewInOut, 16> views;
+    small_vector<VideoCommon::SamplerId, 16> samplers;
+    for (const u32 raw : raws) {
+        const auto [image_index, sampler_index] = TexturePair(raw, via_header_index);
+        views.push_back({image_index});
+        samplers.push_back(texture_cache.GetSamplerId(sampler_index, false));
+    }
+    texture_cache.FillImageViews(std::span(views.data(), views.size()), false, false);
+    if (VideoCommon::Nx2FastDraw::Serial() != serial) {
+        return false;
+    }
+    for (size_t i = 0; i < elements.size(); ++i) {
+        delta_views[elements[i]] = views[i];
+        delta_samplers[elements[i]] = samplers[i];
+        delta_raw_handles[elements[i]] = raws[i];
+    }
+    kept_images_valid = false;
+    NextDeltaGeneration();
+    return true;
 }
 
 bool GraphicsPipeline::ConfigureDelta(bool is_indexed) {

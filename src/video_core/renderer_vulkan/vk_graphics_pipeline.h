@@ -401,6 +401,7 @@ public:
     /// changed, keeping the others. Returns how many it resolved, or nothing (resolve in full).
     std::optional<u32> RetextureDelta();
     std::optional<u32> RetextureComputed();
+    bool ReadRawHandles(std::vector<u32>& out, std::vector<u32>* computed = nullptr) const;
     bool ResolveChangedViews(std::span<const u32> elements, std::span<const u32> raws);
 
     /// Why TakesDeltaDraws is false (diagnostics).
