@@ -317,31 +317,6 @@ QString BestImage(const Game& game) {
     return game.box_front.isEmpty() ? game.box_3d : game.box_front;
 }
 
-QString SquareImage(const Game& game) {
-    return game.square;
-}
-
-QImage SquareCrop(const QImage& image) {
-    if (image.isNull() || image.width() == image.height()) {
-        return image;
-    }
-    const int side = std::min(image.width(), image.height());
-    return image.copy((image.width() - side) / 2, (image.height() - side) / 2, side, side);
-}
-
-std::optional<Candidate> PickAutoCandidate(const QVector<Candidate>& ranked) {
-    if (ranked.isEmpty()) {
-        return std::nullopt;
-    }
-    const Candidate& best = ranked.front();
-    if (best.score < 0.90) {
-        return std::nullopt;
-    }
-    if (ranked.size() > 1 && best.score - ranked[1].score < 0.15) {
-        return std::nullopt;
-    }
-    return best;
-}
 
 QString ImageUrl(const QString& file_name) {
     return QStringLiteral("https://gamesdb-images.launchbox.gg/") + file_name;

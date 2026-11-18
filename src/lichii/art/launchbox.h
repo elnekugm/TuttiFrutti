@@ -4,13 +4,11 @@
 #pragma once
 
 #include <QHash>
-#include <QImage>
 #include <QString>
 #include <QStringList>
 #include <QVector>
 
 #include <functional>
-#include <optional>
 
 class QIODevice;
 
@@ -95,17 +93,6 @@ int ImageTypeScore(const QString& type);
 
 /// FileName of the best image of `game` for the library, or empty. Square artwork wins.
 QString BestImage(const Game& game);
-
-/// FileName of the game's Square artwork, or empty. The automatic lookup uses only this type.
-QString SquareImage(const Game& game);
-
-/// Center square crop, no scaling and no upscaling: the library shows square art. Returns the
-/// image itself when it is already square.
-QImage SquareCrop(const QImage& image);
-
-/// The candidate to apply without asking: the only one, or clearly the best one (score >= 0.90
-/// and 0.15 above the next). Empty when the match is weak or ambiguous.
-std::optional<Candidate> PickAutoCandidate(const QVector<Candidate>& ranked);
 
 /// Reads the user's aliases (normalized source -> title), or an empty map when the file is absent.
 QHash<QString, QString> LoadAliases(const QString& path);

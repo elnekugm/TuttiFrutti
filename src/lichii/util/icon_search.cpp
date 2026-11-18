@@ -307,21 +307,39 @@ std::string UrlEncodePathSegment(std::string value) {
     return encoded;
 }
 
-// Icon image URLs from a SteamGridDB response, best size first.
-std::vector<std::string> ParseSgdbIconUrls(const std::string& body) {
-    std::vector<std::string> urls;
+// Image URLs from a SteamGridDB response, largest area first: a 1024x1024 grid before a
+// 512x512 one. Entries without dimensions (icons) keep the API order.
+struct SgdbImageUrl {
+    std::string url;
+    int width{};
+    int height{};
+};
+
+std::vector<SgdbImageUrl> ParseSgdbIconUrls(const std::string& body) {
+    std::vector<SgdbImageUrl> urls;
     const auto json = nlohmann::json::parse(body, nullptr, false);
     if (json.is_discarded() || !json.is_object() || !json.contains("data") ||
         !json["data"].is_array()) {
         return urls;
     }
     for (const auto& item : json["data"]) {
-        if (urls.size() >= MaxSgdbChoices) {
-            break;
-        }
         if (item.is_object() && item.contains("url") && item["url"].is_string()) {
-            urls.push_back(item["url"].get<std::string>());
+            SgdbImageUrl entry;
+            entry.url = item["url"].get<std::string>();
+            if (item.contains("width") && item["width"].is_number_integer()) {
+                entry.width = item["width"].get<int>();
+            }
+            if (item.contains("height") && item["height"].is_number_integer()) {
+                entry.height = item["height"].get<int>();
+            }
+            urls.push_back(std::move(entry));
         }
+    }
+    std::stable_sort(urls.begin(), urls.end(), [](const SgdbImageUrl& a, const SgdbImageUrl& b) {
+        return a.width * a.height > b.width * b.height;
+    });
+    if (urls.size() > MaxSgdbChoices) {
+        urls.resize(MaxSgdbChoices);
     }
     return urls;
 }
@@ -510,8 +528,8 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             return out;
         }
         // Collect every icon that arrives in time; the user picks one.
-        for (const auto& url : ParseSgdbIconUrls(icons.body)) {
-            const auto img = HttpGet(url, deadline, cancel);
+        for (const auto& image_url : ParseSgdbIconUrls(icons.body)) {
+            const auto img = HttpGet(image_url.url, deadline, cancel);
             if (img.status != HttpStatus::Ok) {
                 if (img.status == HttpStatus::Cancelled || img.status == HttpStatus::Timeout) {
                     if (out.choices.empty()) {
@@ -670,8 +688,8 @@ ArtworkLookupResult LookUpSteamGridDbArtwork(const std::string& title, const std
             if (list.status != HttpStatus::Ok) {
                 return failed(list);
             }
-            for (const auto& url : ParseSgdbIconUrls(list.body)) {
-                const auto image = HttpGet(url, deadline, cancel);
+            for (const auto& image_url : ParseSgdbIconUrls(list.body)) {
+                const auto image = HttpGet(image_url.url, deadline, cancel);
                 if (image.status == HttpStatus::Cancelled || image.status == HttpStatus::Timeout) {
                     return failed(image);
                 }
