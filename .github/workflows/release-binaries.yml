@@ -148,7 +148,7 @@ jobs:
           test -x "$profdata"
           summary=$("$profdata" show "${{ matrix.profile }}")
           printf '%s\n' "$summary" | sed -n '1,20p'
-          grep -Eq 'Total number of functions:[[:space:]]*[1-9][0-9]*' <<< "$summary"
+          grep -Eq 'Total functions:[[:space:]]*[1-9][0-9]*' <<< "$summary"
 
       - name: Set up MSVC
         if: startsWith(matrix.platform, 'windows')
@@ -171,7 +171,7 @@ jobs:
           $summary = & $profdata show '${{ matrix.profile }}' 2>&1
           if ($LASTEXITCODE -ne 0) { throw "Invalid PGO profile: $summary" }
           $summary | Select-Object -First 20
-          if (-not ($summary -match 'Total number of functions:\s*[1-9][0-9]*')) {
+          if (-not ($summary -match 'Total functions:\s*[1-9][0-9]*')) {
             throw "The PGO profile holds no functions"
           }
 
@@ -455,7 +455,7 @@ jobs:
             Remove-Item -Force
           Remove-Item "$bin/vc_redist.x64.exe" -Force -ErrorAction SilentlyContinue
 
-          windeployqt --release --no-translations "$bin/TuttiFrutti.exe"
+          windeployqt --release --compiler-runtime --no-translations "$bin/TuttiFrutti.exe"
           Get-ChildItem $bin -Recurse -File -Include *.pdb,*.profraw,*.profdata |
             Remove-Item -Force
           Remove-Item "$bin/vc_redist.x64.exe" -Force -ErrorAction SilentlyContinue
