@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag and build version
         type: string
-        default: build-1.1
+        default: build-1.2
       publish_release:
         description: Publish the four packages as a GitHub release
         type: boolean
@@ -615,6 +615,15 @@ jobs:
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
           cat > notes.md <<EOF
           TuttiFrutti ${tag}, built automatically from ${GITHUB_SHA}.
+
+          **What's new in 1.2**
+          - Fast draws re-read only the texture handles that changed, including computed ones, and
+            can return to a pipeline's own last draw instead of resolving everything again.
+          - Ocarina of Time no longer re-uploads its native uniform bank every frame, and register
+            changes no longer throw away uniform keeps.
+          - Large shader caches (100,000+ pipelines) can be compiled on the loading screen before
+            the game starts, with a Skip button; the driver cache is saved before play.
+          - Query cache and multi-range buffer work reduce locks, waits and memory growth.
 
           All four packages are Release builds with profile-guided optimization (PGO use) and
           ThinLTO. They contain only the emulator, its runtime libraries and resources, the licence
