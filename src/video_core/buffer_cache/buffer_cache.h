@@ -2613,7 +2613,12 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
             return alignment > 1 && (offset % alignment) != 0;
         }
     }();
-    if (native_bank &&
+    // Ocarina of Time's banks do not change behind the tracker, and re-uploading them every
+    // frame costs frame rate. Other titles keep the upload; EDEN_NX2_PERF_VERIFY keeps it for OoT.
+    constexpr u64 ocarina_of_time = 0x0400486024DEC000ULL;
+    const bool bank_recheck =
+        Settings::GetCurrentProgramID() != ocarina_of_time || Nx2Perf::Verify();
+    if (bank_recheck && native_bank &&
         (Nx2Perf::Verify() || !native_indirect_uniforms_this_frame.contains(device_addr)) &&
         !memory_tracker.IsRegionGpuModified(device_addr, size) &&
         native_indirect_uniforms_this_frame.insert(device_addr).second) {
