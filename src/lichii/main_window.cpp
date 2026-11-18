@@ -5145,7 +5145,8 @@ void MainWindow::PrepareCachedShaderPrecompile(u64 title_id) {
     }
     constexpr std::size_t threshold = 100000;
     const std::size_t count = CachedPipelineCount(title_id);
-    if (count < threshold) {
+    if (count == 0 ||
+        (mode == Settings::PrecompileCachedShaders::Ask && count < threshold)) {
         return;
     }
     if (mode == Settings::PrecompileCachedShaders::Ask) {
