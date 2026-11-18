@@ -25,6 +25,7 @@
 #include "common/common_types.h"
 #include "core/core.h"
 #include "frontend_common/play_time_manager.h"
+#include "lichii/art/launchbox.h"
 #include "qt_common/config/uisettings.h"
 #include "qt_common/game_list/model.h"
 #include "qt_common/util/game.h"
@@ -171,6 +172,10 @@ private:
     void QueueArtworkLookup(u64 program_id, const QString& title, bool forced);
     /// LaunchBox: searches the local index and lets the player choose the box art.
     void LookUpLaunchBoxArt(u64 program_id);
+    /// LaunchBox automatic art, queued for games without a picture; square images only.
+    void QueueLaunchBoxLookup(u64 program_id, const QString& title);
+    void StartLaunchBoxLookups();
+    bool EnsureLaunchBoxIndex();
     /// Downloads Metadata.zip and rebuilds the Switch-only index; done(true) on success.
     void UpdateLaunchBoxArtDatabase(std::function<void(bool)> done = {});
     void StartArtworkLookups();
@@ -234,6 +239,17 @@ private:
     /// Lookups wait on the network: their own threads keep them from holding up a library scan
     /// on the global pool.
     QThreadPool artwork_pool;
+
+    /// LaunchBox automatic artwork: one shared index, a small queue and at most MaxParallelLookups
+    /// downloads. Square images only; ambiguous matches are skipped.
+    struct LaunchBoxLookup {
+        u64 program_id;
+        QString title;
+    };
+    QList<LaunchBoxLookup> launchbox_queue;
+    QSet<u64> launchbox_attempted;
+    std::shared_ptr<const QVector<LaunchBox::Game>> launchbox_games;
+    int launchbox_running = 0;
 };
 
 class GameListPlaceholder : public QWidget {

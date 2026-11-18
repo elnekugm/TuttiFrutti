@@ -22,7 +22,7 @@ namespace LaunchBox {
 namespace {
 
 constexpr quint32 IndexMagic = 0x54464C42;  // "TFLB"
-constexpr quint32 IndexVersion = 1;
+constexpr quint32 IndexVersion = 2;
 constexpr quint32 MaxIndexedGames = 200'000;
 
 bool IsSwitchPlatform(const QString& platform) {
@@ -297,6 +297,9 @@ QVector<Candidate> Rank(const QString& title, const QString& platform, const QVe
 
 int ImageTypeScore(const QString& type) {
     const QString value = type.trimmed().toLower();
+    if (value == QStringLiteral("square")) {
+        return 200;
+    }
     if (value == QStringLiteral("box - front")) {
         return 100;
     }
@@ -308,7 +311,36 @@ int ImageTypeScore(const QString& type) {
 }
 
 QString BestImage(const Game& game) {
+    if (!game.square.isEmpty()) {
+        return game.square;
+    }
     return game.box_front.isEmpty() ? game.box_3d : game.box_front;
+}
+
+QString SquareImage(const Game& game) {
+    return game.square;
+}
+
+QImage SquareCrop(const QImage& image) {
+    if (image.isNull() || image.width() == image.height()) {
+        return image;
+    }
+    const int side = std::min(image.width(), image.height());
+    return image.copy((image.width() - side) / 2, (image.height() - side) / 2, side, side);
+}
+
+std::optional<Candidate> PickAutoCandidate(const QVector<Candidate>& ranked) {
+    if (ranked.isEmpty()) {
+        return std::nullopt;
+    }
+    const Candidate& best = ranked.front();
+    if (best.score < 0.90) {
+        return std::nullopt;
+    }
+    if (ranked.size() > 1 && best.score - ranked[1].score < 0.15) {
+        return std::nullopt;
+    }
+    return best;
 }
 
 QString ImageUrl(const QString& file_name) {
@@ -398,6 +430,7 @@ bool ParseMetadata(QIODevice& xml, QVector<Game>* out, QString* error) {
     QXmlStreamReader reader(&xml);
     QVector<Game> games;
     QHash<qint64, int> by_id;
+    QHash<qint64, ImagePick> square;
     QHash<qint64, ImagePick> front;
     QHash<qint64, ImagePick> three_d;
 
@@ -435,12 +468,22 @@ bool ParseMetadata(QIODevice& xml, QVector<Game>* out, QString* error) {
             if (type_score == 0 || file.isEmpty()) {
                 continue;
             }
-            ImagePick pick{file, type_score * 10 + RegionScore(region)};
-            QHash<qint64, ImagePick>& target =
-                type.compare(QStringLiteral("Box - 3D"), Qt::CaseInsensitive) == 0 ? three_d : front;
-            const auto existing = target.constFind(database_id);
-            if (existing == target.constEnd() || pick.score > existing->score) {
-                target.insert(database_id, pick);
+            const QString normalized_type = type.trimmed().toLower();
+            QHash<qint64, ImagePick>* target = nullptr;
+            if (normalized_type == QStringLiteral("square")) {
+                target = &square;
+            } else if (normalized_type == QStringLiteral("box - front")) {
+                target = &front;
+            } else if (normalized_type == QStringLiteral("box - 3d")) {
+                target = &three_d;
+            }
+            if (target == nullptr) {
+                continue;
+            }
+            const ImagePick pick{file, type_score * 10 + RegionScore(region)};
+            const auto existing = target->constFind(database_id);
+            if (existing == target->constEnd() || pick.score > existing->score) {
+                target->insert(database_id, pick);
             }
         }
     }
@@ -450,6 +493,9 @@ bool ParseMetadata(QIODevice& xml, QVector<Game>* out, QString* error) {
             *error = reader.errorString();
         }
         return false;
+    }
+    for (auto it = square.constBegin(); it != square.constEnd(); ++it) {
+        games[by_id.value(it.key())].square = it->file;
     }
     for (auto it = front.constBegin(); it != front.constEnd(); ++it) {
         games[by_id.value(it.key())].box_front = it->file;
@@ -474,7 +520,7 @@ bool SaveIndex(const QVector<Game>& games, const QString& path, QString* error) 
     stream << IndexMagic << IndexVersion << quint32(games.size());
     for (const Game& game : games) {
         stream << game.database_id << game.name << game.platform << qint32(game.year)
-               << game.alternate_names << game.box_front << game.box_3d;
+               << game.alternate_names << game.box_front << game.box_3d << game.square;
     }
     if (stream.status() != QDataStream::Ok || !file.commit()) {
         if (error) {
@@ -512,7 +558,7 @@ bool LoadIndex(const QString& path, QVector<Game>* out, QString* error) {
         Game game;
         qint32 year = 0;
         stream >> game.database_id >> game.name >> game.platform >> year >>
-            game.alternate_names >> game.box_front >> game.box_3d;
+            game.alternate_names >> game.box_front >> game.box_3d >> game.square;
         if (stream.status() != QDataStream::Ok) {
             if (error) {
                 *error = QStringLiteral("truncated LaunchBox art index");

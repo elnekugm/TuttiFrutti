@@ -11,7 +11,9 @@
 #include "lichii/art/launchbox.h"
 #include "lichii/art/launchbox_net.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstdlib>
 
 using namespace LaunchBox;
 
@@ -162,6 +164,12 @@ TEST_CASE("LaunchBox keeps Switch games and their box art", "[launchbox]") {
   </GameImage>
   <GameImage>
     <DatabaseID>10</DatabaseID>
+    <FileName>eee.jpg</FileName>
+    <Type>Square</Type>
+    <Region>Europe</Region>
+  </GameImage>
+  <GameImage>
+    <DatabaseID>10</DatabaseID>
     <FileName>ccc.png</FileName>
     <Type>Clear Logo</Type>
   </GameImage>
@@ -185,14 +193,18 @@ TEST_CASE("LaunchBox keeps Switch games and their box art", "[launchbox]") {
     REQUIRE(game.name == QStringLiteral("Mario Kart World"));
     REQUIRE(game.year == 2025);
     REQUIRE(game.alternate_names == QStringList{QStringLiteral("MK World")});
+    REQUIRE(game.square == QStringLiteral("eee.jpg"));
     REQUIRE(game.box_front == QStringLiteral("aaa.jpg"));
     REQUIRE(game.box_3d == QStringLiteral("bbb.jpg"));
-    REQUIRE(BestImage(game) == QStringLiteral("aaa.jpg"));
+    REQUIRE(SquareImage(game) == QStringLiteral("eee.jpg"));
+    REQUIRE(BestImage(game) == QStringLiteral("eee.jpg"));
 
     const auto ranked = Rank(QStringLiteral("MK World"), QStringLiteral("Nintendo Switch 2"), games);
     REQUIRE_FALSE(ranked.isEmpty());
     REQUIRE(ranked.front().game.database_id == 10);
 
+    REQUIRE(ImageTypeScore(QStringLiteral("Square")) >
+            ImageTypeScore(QStringLiteral("Box - Front")));
     REQUIRE(ImageTypeScore(QStringLiteral("Box - Front")) >
             ImageTypeScore(QStringLiteral("Box - 3D")));
     REQUIRE(ImageTypeScore(QStringLiteral("Clear Logo")) == 0);
@@ -207,11 +219,12 @@ TEST_CASE("LaunchBox index round-trips", "[launchbox]") {
     REQUIRE(dir.isValid());
     const QString path = dir.filePath(QStringLiteral("switch-index.bin"));
 
-    const QVector<Game> games{
+    QVector<Game> games{
         MakeGame(10, QStringLiteral("Mario Kart World"), QStringLiteral("Nintendo Switch 2"), 2025,
                  {QStringLiteral("MK World")}, QStringLiteral("aaa.jpg"), QStringLiteral("bbb.jpg")),
         MakeGame(11, QStringLiteral("Kirby"), QStringLiteral("Nintendo Switch"), 2022),
     };
+    games[0].square = QStringLiteral("ccc.jpg");
     QString error;
     REQUIRE(SaveIndex(games, path, &error));
 
@@ -225,8 +238,39 @@ TEST_CASE("LaunchBox index round-trips", "[launchbox]") {
     REQUIRE(loaded[0].alternate_names == games[0].alternate_names);
     REQUIRE(loaded[0].box_front == QStringLiteral("aaa.jpg"));
     REQUIRE(loaded[0].box_3d == QStringLiteral("bbb.jpg"));
+    REQUIRE(loaded[0].square == QStringLiteral("ccc.jpg"));
     REQUIRE(loaded[1].name == QStringLiteral("Kirby"));
 }
+TEST_CASE("LaunchBox automatic art is square and unambiguous", "[launchbox]") {
+    QImage wide(400, 200, QImage::Format_ARGB32);
+    wide.fill(Qt::red);
+    REQUIRE(SquareCrop(wide).size() == QSize(200, 200));
+    QImage tall(300, 600, QImage::Format_ARGB32);
+    tall.fill(Qt::blue);
+    REQUIRE(SquareCrop(tall).size() == QSize(300, 300));
+    QImage already(256, 256, QImage::Format_ARGB32);
+    REQUIRE(SquareCrop(already).size() == QSize(256, 256));
+
+    Game best = MakeGame(1, QStringLiteral("Splatoon Raiders"), QStringLiteral("Nintendo Switch 2"),
+                         2026);
+    best.square = QStringLiteral("square.jpg");
+    REQUIRE(SquareImage(best) == QStringLiteral("square.jpg"));
+    const Candidate confident{best, 0.95};
+    REQUIRE(PickAutoCandidate({confident}).has_value());
+    REQUIRE_FALSE(PickAutoCandidate({}).has_value());
+    const Candidate weak{best, 0.80};
+    REQUIRE_FALSE(PickAutoCandidate({weak}).has_value());
+    const Candidate close{best, 0.88};
+    REQUIRE_FALSE(PickAutoCandidate({confident, close}).has_value());
+    const Candidate clear{best, 0.60};
+    REQUIRE(PickAutoCandidate({confident, clear}).has_value());
+
+    Game box_only = MakeGame(2, QStringLiteral("Box Only"), QStringLiteral("Nintendo Switch"), 2020,
+                             {}, QStringLiteral("front.jpg"));
+    REQUIRE(SquareImage(box_only).isEmpty());
+    REQUIRE(BestImage(box_only) == QStringLiteral("front.jpg"));
+}
+
 TEST_CASE("LaunchBox reads the real metadata package and image host", "[.][launchbox-live]") {
     const QString zip = QStringLiteral("C:/Users/Neku/lx/lichii316/launchbox-metadata.zip");
     if (!QFile::exists(zip)) {
@@ -236,16 +280,23 @@ TEST_CASE("LaunchBox reads the real metadata package and image host", "[.][launc
     QString error;
     REQUIRE(BuildIndexFromZip(zip, &games, &error));
     REQUIRE(games.size() > 1000);
+    const auto with_square =
+        std::count_if(games.begin(), games.end(), [](const Game& game) {
+            return !game.square.isEmpty();
+        });
+    REQUIRE(with_square > 500);
 
-    const auto ranked = Rank(QStringLiteral("Mario Kart World"), QStringLiteral("Nintendo Switch 2"),
-                             games);
+    const auto ranked = Rank(QStringLiteral("Mario Kart 8 Deluxe"),
+                             QStringLiteral("Nintendo Switch"), games);
     REQUIRE_FALSE(ranked.isEmpty());
-    REQUIRE(ranked.front().game.name == QStringLiteral("Mario Kart World"));
-    const QString image_file = BestImage(ranked.front().game);
+    REQUIRE(ranked.front().game.name == QStringLiteral("Mario Kart 8 Deluxe"));
+    const QString image_file = SquareImage(ranked.front().game);
     REQUIRE_FALSE(image_file.isEmpty());
 
     std::atomic_bool cancel{false};
     const ImageResult image = FetchImage(image_file, cancel);
     REQUIRE(image.status == ImageResult::Status::Ok);
     REQUIRE_FALSE(image.image.isNull());
+    REQUIRE(std::abs(image.image.width() - image.image.height()) <=
+            std::max(image.image.width(), image.image.height()) / 10);
 }

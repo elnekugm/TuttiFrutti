@@ -4,11 +4,13 @@
 #pragma once
 
 #include <QHash>
+#include <QImage>
 #include <QString>
 #include <QStringList>
 #include <QVector>
 
 #include <functional>
+#include <optional>
 
 class QIODevice;
 
@@ -27,6 +29,7 @@ struct Game {
     QString platform;
     int year{};
     QStringList alternate_names;
+    QString square;     ///< FileName of the "Square" image, the library art, if any
     QString box_front;  ///< FileName of the "Box - Front" image, if any
     QString box_3d;     ///< FileName of the "Box - 3D" image, if any
 };
@@ -85,12 +88,24 @@ QString DefaultIndexPath();
 /// https://gamesdb-images.launchbox.gg/<FileName>
 QString ImageUrl(const QString& file_name);
 
-/// How good an image type is as library artwork: box front first, then box 3D. Icons, logos,
-/// banners, screenshots, backgrounds and advertisements are excluded (0).
+/// How good an image type is as library artwork: Square (the library cover) first, then box
+/// front, then box 3D. Icons, logos, banners, screenshots, backgrounds and advertisements are
+/// excluded (0).
 int ImageTypeScore(const QString& type);
 
-/// FileName of the best image of `game` for the library, or empty.
+/// FileName of the best image of `game` for the library, or empty. Square artwork wins.
 QString BestImage(const Game& game);
+
+/// FileName of the game's Square artwork, or empty. The automatic lookup uses only this type.
+QString SquareImage(const Game& game);
+
+/// Center square crop, no scaling and no upscaling: the library shows square art. Returns the
+/// image itself when it is already square.
+QImage SquareCrop(const QImage& image);
+
+/// The candidate to apply without asking: the only one, or clearly the best one (score >= 0.90
+/// and 0.15 above the next). Empty when the match is weak or ambiguous.
+std::optional<Candidate> PickAutoCandidate(const QVector<Candidate>& ranked);
 
 /// Reads the user's aliases (normalized source -> title), or an empty map when the file is absent.
 QHash<QString, QString> LoadAliases(const QString& path);

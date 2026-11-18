@@ -20,6 +20,7 @@
 #include <QList>
 #include <QDialog>
 #include <QFile>
+#include <QImage>
 #include <QListView>
 #include <QMessageBox>
 #include <QPointer>
@@ -50,6 +51,7 @@
 #include "qt_common/game_list/model.h"
 #include "lichii/art/launchbox.h"
 #include "lichii/art/launchbox_dialog.h"
+#include "lichii/art/launchbox_net.h"
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
 #include "lichii/game/carousel.h"
@@ -66,6 +68,11 @@
 namespace {
 // A few at a time keeps SteamGridDB happy and the scan of a large library short.
 constexpr int MaxParallelLookups = 2;
+
+/// The automatic LaunchBox lookup's result: a downloaded square image, when the match is safe.
+struct LaunchBoxAutoResult {
+    QImage image;
+};
 } // namespace
 
 GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvider* provider_,
@@ -416,7 +423,12 @@ QString GameList::GameTitle(u64 program_id) const {
 }
 
 void GameList::QueueArtworkLookups() {
-    if (UISettings::values.steamgriddb_api_key.GetValue().empty()) {
+    const bool steamgriddb = !UISettings::values.steamgriddb_api_key.GetValue().empty();
+    const bool launchbox = !steamgriddb && QFile::exists(LaunchBox::DefaultIndexPath());
+    if (!steamgriddb && !launchbox) {
+        return;
+    }
+    if (launchbox && !EnsureLaunchBoxIndex()) {
         return;
     }
     const std::function<void(const QStandardItem*)> visit = [&](const QStandardItem* parent) {
@@ -426,8 +438,14 @@ void GameList::QueueArtworkLookups() {
                 GameListItemType::Game) {
                 // Games with an icon in the file or custom artwork already have a picture.
                 if (!item->data(GameListItemPath::HasIconRole).toBool()) {
-                    QueueArtworkLookup(item->data(GameListItemPath::ProgramIdRole).toULongLong(),
-                                       item->data(GameListItemPath::TitleRole).toString(), false);
+                    const u64 program_id =
+                        item->data(GameListItemPath::ProgramIdRole).toULongLong();
+                    const QString title = item->data(GameListItemPath::TitleRole).toString();
+                    if (steamgriddb) {
+                        QueueArtworkLookup(program_id, title, false);
+                    } else {
+                        QueueLaunchBoxLookup(program_id, title);
+                    }
                 }
             } else {
                 visit(item);
@@ -435,6 +453,82 @@ void GameList::QueueArtworkLookups() {
         }
     };
     visit(item_model->invisibleRootItem());
+}
+
+bool GameList::EnsureLaunchBoxIndex() {
+    if (launchbox_games) {
+        return true;
+    }
+    QVector<LaunchBox::Game> games;
+    QString error;
+    if (!LaunchBox::LoadIndex(LaunchBox::DefaultIndexPath(), &games, &error)) {
+        LOG_WARNING(Frontend, "LaunchBox art index could not be loaded: {}", error.toStdString());
+        return false;
+    }
+    launchbox_games = std::make_shared<const QVector<LaunchBox::Game>>(std::move(games));
+    return true;
+}
+
+void GameList::QueueLaunchBoxLookup(u64 program_id, const QString& title) {
+    if (program_id == 0 || title.trimmed().isEmpty() ||
+        launchbox_attempted.contains(program_id)) {
+        return;
+    }
+    launchbox_attempted.insert(program_id);
+    launchbox_queue.append({program_id, title});
+    StartLaunchBoxLookups();
+}
+
+void GameList::StartLaunchBoxLookups() {
+    while (launchbox_running < MaxParallelLookups && !launchbox_queue.isEmpty()) {
+        const LaunchBoxLookup lookup = launchbox_queue.takeFirst();
+        if (!launchbox_games) {
+            continue;
+        }
+        ++launchbox_running;
+        const QString platform = (lookup.program_id >> 56) == 0x04
+                                     ? QStringLiteral("Nintendo Switch 2")
+                                     : QStringLiteral("Nintendo Switch");
+        auto* const watcher = new QFutureWatcher<LaunchBoxAutoResult>(this);
+        connect(watcher, &QFutureWatcher<LaunchBoxAutoResult>::finished, this,
+                [this, watcher, lookup] {
+                    watcher->deleteLater();
+                    --launchbox_running;
+                    const LaunchBoxAutoResult result = watcher->result();
+                    std::error_code ec;
+                    const bool artwork_added = std::filesystem::exists(
+                        QtCommon::Game::CustomArtworkPath(lookup.program_id), ec);
+                    if (!artwork_added && !result.image.isNull() &&
+                        QtCommon::Game::SaveCustomArtwork(lookup.program_id,
+                                                          LaunchBox::SquareCrop(result.image))) {
+                        LOG_INFO(Frontend, "LaunchBox artwork saved for {:016X}",
+                                 lookup.program_id);
+                        artwork_saved.insert(lookup.program_id);
+                        ShowCustomArtwork(lookup.program_id);
+                    }
+                    StartLaunchBoxLookups();
+                });
+        const auto index = launchbox_games;
+        const QString title = lookup.title;
+        watcher->setFuture(QtConcurrent::run([index, title, platform] {
+            LaunchBoxAutoResult result;
+            const auto ranked = LaunchBox::Rank(title, platform, *index, 4);
+            const auto picked = LaunchBox::PickAutoCandidate(ranked);
+            if (!picked) {
+                return result;
+            }
+            const QString file = LaunchBox::SquareImage(picked->game);
+            if (file.isEmpty()) {
+                return result;
+            }
+            std::atomic_bool cancel{false};
+            const auto image = LaunchBox::FetchImage(file, cancel);
+            if (image.status == LaunchBox::ImageResult::Status::Ok) {
+                result.image = image.image;
+            }
+            return result;
+        }));
+    }
 }
 
 void GameList::QueueArtworkLookup(u64 program_id, const QString& title, bool forced) {
@@ -512,6 +606,9 @@ void GameList::UpdateLaunchBoxArtDatabase(std::function<void(bool)> done) {
                     return;
                 }
                 LOG_INFO(Frontend, "LaunchBox art database updated");
+                // The index changed: reload it on the next scan and fill games without art.
+                launchbox_games.reset();
+                QueueArtworkLookups();
                 if (done) {
                     done(true);
                 }
