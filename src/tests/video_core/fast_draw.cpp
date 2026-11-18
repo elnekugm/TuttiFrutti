@@ -447,9 +447,10 @@ TEST_CASE("Fast draw keeps vertex attribute formats light only with dynamic vert
         f.Write(method, f.Reg(method) + 0x40); // the attribute's offset
         return FastDraw::Serial() == serial;
     };
-    const bool previous = FastDraw::g_dynamic_vertex_input.exchange(false);
+    const bool previous = FastDraw::g_vertex_streams_dynamic;
+    FastDraw::g_vertex_streams_dynamic = false;
     CHECK_FALSE(light(formats)); // the formats are in the pipeline key
-    FastDraw::g_dynamic_vertex_input.store(true);
+    FastDraw::g_vertex_streams_dynamic = true;
     CHECK(light(formats));
     CHECK(light(formats + Maxwell3D::Regs::NumVertexAttributes - 1));
     CHECK_FALSE(light(formats + Maxwell3D::Regs::NumVertexAttributes));
@@ -457,7 +458,7 @@ TEST_CASE("Fast draw keeps vertex attribute formats light only with dynamic vert
     f.Write(formats + 2, f.Reg(formats + 2) + 0x40);
     f.DrawArrays(3, 3);
     CHECK(f.Reusable());
-    FastDraw::g_dynamic_vertex_input.store(previous);
+    FastDraw::g_vertex_streams_dynamic = previous;
 }
 
 TEST_CASE("Fast draw breaks skip the add only on the drawing thread, after its first since a read",
@@ -486,10 +487,10 @@ TEST_CASE("Fast draw breaks skip the add only on the drawing thread, after its f
 }
 
 TEST_CASE("Unsplit callbacks end draw reuse before they execute", "[fast_draw][unsplit_fast_draw]") {
-    const bool previous_reads_serial = FastDraw::t_reads_serial;
+    const bool previous_reads_serial = FastDraw::t_reads_serials;
     const bool previous_serial_bumped = FastDraw::t_serial_bumped;
     SCOPE_EXIT {
-        FastDraw::t_reads_serial = previous_reads_serial;
+        FastDraw::t_reads_serials = previous_reads_serial;
         FastDraw::t_serial_bumped = previous_serial_bumped;
     };
     FastDrawFixture f;

@@ -105,12 +105,12 @@ TEST_CASE("Unsplit command parser invalidates reuse before other engine state an
           "[video_core][fast_draw][unsplit_fast_draw]") {
     namespace FastDraw = VideoCommon::Nx2FastDraw;
     const bool previous = FastDraw::Enabled();
-    const bool previous_reads_serial = FastDraw::t_reads_serial;
+    const bool previous_reads_serial = FastDraw::t_reads_serials;
     const bool previous_serial_bumped = FastDraw::t_serial_bumped;
     FastDraw::SetEnabledForTest(true);
     SCOPE_EXIT {
         FastDraw::SetEnabledForTest(previous);
-        FastDraw::t_reads_serial = previous_reads_serial;
+        FastDraw::t_reads_serials = previous_reads_serial;
         FastDraw::t_serial_bumped = previous_serial_bumped;
     };
     REQUIRE_FALSE(VideoCommon::GpuSplit::Get().Active());

@@ -372,7 +372,7 @@ bool Maxwell3D::IsFastDrawVertexFormat(u32 method) {
     // With dynamic vertex input only each attribute's type class is in the pipeline key, which
     // the reusable draw compares (TakeReusableDraw); the rest is recorded for every draw.
     constexpr u32 formats = MAXWELL3D_REG_INDEX(vertex_attrib_format);
-    return VideoCommon::Nx2FastDraw::g_dynamic_vertex_input.load(std::memory_order_relaxed) &&
+    return VideoCommon::Nx2FastDraw::g_vertex_streams_dynamic &&
            method >= formats && method < formats + Regs::NumVertexAttributes;
 }
 
@@ -1289,12 +1289,18 @@ void Maxwell3D::ProcessCBMultiData(const u32* start_base, u32 amount) {
     const size_t write_size = std::min(copy_size, room / sizeof(u32) * sizeof(u32));
     if (write_size != 0) {
         const GPUVAddr address{buffer_address + regs.const_buffer.offset};
-        if (!WriteBoundConstantBuffer(regs.const_buffer.offset, start_base,
-                                      static_cast<u32>(write_size))) {
-            if (VideoCommon::Nx2FastDraw::Enabled()) {
-                NoteFastDrawConstantData(address, address + write_size);
+        const bool unchanged =
+            VideoCommon::Nx2FastDraw::Enabled() &&
+            VideoCommon::Nx2FastDraw::WriteData(memory_manager, address, start_base,
+                                                write_size);
+        if (!unchanged) {
+            if (!WriteBoundConstantBuffer(regs.const_buffer.offset, start_base,
+                                          static_cast<u32>(write_size))) {
+                if (VideoCommon::Nx2FastDraw::Enabled()) {
+                    NoteFastDrawConstantData(address, address + write_size);
+                }
+                memory_manager.WriteBlockCached(address, start_base, write_size);
             }
-            memory_manager.WriteBlockCached(address, start_base, write_size);
         }
     }
     if (write_size != copy_size) {

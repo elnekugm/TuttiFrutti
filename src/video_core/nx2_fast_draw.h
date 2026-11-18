@@ -63,10 +63,10 @@ inline constexpr std::array<const char*, static_cast<size_t>(Reason::Count)> rea
 
 inline std::atomic<bool> g_enabled{true};
 
-/// Whether pipelines take their vertex input as dynamic state (VK_EXT_vertex_input_dynamic_state):
-/// then the vertex attribute formats are draw parameters, as only each attribute's type class is
-/// in the pipeline key. Set by the pipeline cache before the GPU threads run, read on the back.
-inline std::atomic<bool> g_dynamic_vertex_input{};
+/// Whether vertex stream strides and enables are dynamic state (extended dynamic state and
+/// dynamic vertex input): then no pipeline depends on them and they are draw parameters. Set by
+/// the pipeline cache before the GPU threads run, read on the back.
+inline bool g_vertex_streams_dynamic{};
 
 /// Any thread: whether fast draws run (always, unless a test turned them off). The rasterizer
 /// latches it per draw (on the thread that draws) and starts with a full resolve when it turns on.
@@ -88,48 +88,34 @@ inline void SetEnabledForTest(bool on) {
     return verify;
 }
 
-/// On its own cache line, away from what every thread reads (g_enabled).
+/// On their own cache lines, away from what every thread reads (g_enabled).
 alignas(64) inline std::atomic<u64> g_serial{1};
-/// The last break's reason and, for Register and Method, its 3D method (diagnostics). Stored by
-/// every break, also those that skip the add below, so a register block's one break names what
-/// its writes one by one would.
+/// Bumped by every break but a 3D register change: register writes change no memory, so draws
+/// with only those in between can keep uniforms as delta draws do (MemorySerial).
+inline std::atomic<u64> g_memory_serial{1};
+/// The reason of the break that bumped g_serial last and, for Register and Method, its 3D method
+/// (diagnostics; on the thread that draws, the first break since it read the serial).
 inline std::atomic<u32> g_last_break{};
 
-/// The thread that draws reads the serial before each draw (Serial). Once one of its breaks
-/// bumped the serial since that read, more change nothing it compares, so they skip the locked
-/// add (every changed 3D register breaks). Threads that never read it (the front's puller, guest
-/// CPU write traps, unmaps) always bump. From lucastaonline's 865afaa4f3 (#1161).
-inline thread_local bool t_reads_serial{};
+/// The thread that draws reads the serials before each draw (Serial, MemorySerial). Once one of
+/// its breaks bumped a serial since it last read it, more change nothing it compares: they skip
+/// the atomic add (~1.4 million other engine methods a second in Ocarina of Time's water). Other
+/// threads always bump.
+inline thread_local bool t_reads_serials{};
 inline thread_local bool t_serial_bumped{};
-
-/// Bumped where the guest CPU may have synchronised with the GPU: fences, semaphores, syncpoints,
-/// reports, frames, other engines and requests from other threads. After one the guest may have
-/// written memory the caches were not told about (pages that aren't write-protected), so uniform
-/// keeps read their buffers again.
-inline std::atomic<u64> g_sync_serial{1};
-
-inline void NoteSync() {
-    g_sync_serial.fetch_add(1, std::memory_order_relaxed);
-}
-
-[[nodiscard]] inline u64 SyncSerial() {
-    return g_sync_serial.load(std::memory_order_acquire);
-}
+inline thread_local bool t_memory_serial_bumped{};
 
 inline void Break(Reason reason, u32 method = 0) {
-    // 3D methods that let the CPU synchronise (reports, syncpoints) note it where they reach the
-    // rasterizer. Invalidations end image and shader lifetimes, not guest memory writes.
-    if (reason != Reason::Register && reason != Reason::Method && reason != Reason::ConstantData &&
-        reason != Reason::TextureHeaders && reason != Reason::Invalidation) {
-        NoteSync();
-    }
-    if (!Enabled()) {
-        return;
-    }
-    g_last_break.store(static_cast<u32>(reason) | (method << 8), std::memory_order_relaxed);
-    if (!(t_reads_serial && t_serial_bumped)) {
-        g_serial.fetch_add(1, std::memory_order_relaxed);
-        t_serial_bumped = t_reads_serial;
+    if (Enabled()) {
+        if (reason != Reason::Register && !(t_reads_serials && t_memory_serial_bumped)) {
+            g_memory_serial.fetch_add(1, std::memory_order_relaxed);
+            t_memory_serial_bumped = t_reads_serials;
+        }
+        if (!(t_reads_serials && t_serial_bumped)) {
+            g_serial.fetch_add(1, std::memory_order_relaxed);
+            g_last_break.store(static_cast<u32>(reason) | (method << 8), std::memory_order_relaxed);
+            t_serial_bumped = t_reads_serials;
+        }
     }
 }
 
@@ -138,12 +124,28 @@ inline void BreakUnsplit(Reason reason) {
     Break(reason);
 }
 
-/// The thread that draws: what it compares fast draws with (and from then on its next break
+/// The thread that draws: what it compares fast draws with (and, from then on, its next break
 /// bumps the serial again).
 inline u64 Serial() {
-    t_reads_serial = true;
+    t_reads_serials = true;
     t_serial_bumped = false;
     return g_serial.load(std::memory_order_relaxed);
+}
+
+inline u64 MemorySerial() {
+    t_reads_serials = true;
+    t_memory_serial_bumped = false;
+    return g_memory_serial.load(std::memory_order_relaxed);
+}
+
+/// Older call sites that note a guest sync. Under the memory-serial model a sync is a memory
+/// break: it is conservative, and keeps the buffer cache's uniform keeps valid.
+inline void NoteSync() {
+    g_memory_serial.fetch_add(1, std::memory_order_relaxed);
+}
+
+[[nodiscard]] inline u64 SyncSerial() {
+    return g_memory_serial.load(std::memory_order_acquire);
 }
 
 /// The device memory a GPU range maps to. A write through another GPU address that maps the
@@ -329,5 +331,19 @@ inline void NoteDeviceData(DAddr begin, DAddr end) {
                                               delta.num_device_writes, begin, end);
     }
 }
+
+/// Inline constant buffer writes left out of the delta because they wrote the words memory
+/// held (EDEN_NX2_GPU_PROFILE logs them).
+inline std::atomic<u64> g_unchanged_writes{};
+
+/// Notes data about to be written to [begin, begin + bytes) in GPU memory: inline constant buffer
+/// `words`, unless memory holds those words already, or with `words` null data not known yet
+/// (reports). Texture and sampler headers are checked by the caller.
+void NoteWrittenData(Tegra::MemoryManager& memory, GPUVAddr begin, const void* words, u64 bytes);
+/// NoteWrittenData for inline constant buffer `words` the caller is about to write: true when
+/// the write changes nothing and can be left out (memory holds the words, and neither the GPU
+/// caches nor a download for a guest read may hold others there). Fast draws off: false.
+[[nodiscard]] bool WriteData(Tegra::MemoryManager& memory, GPUVAddr begin, const void* words,
+                             u64 bytes);
 
 } // namespace VideoCommon::Nx2FastDraw
