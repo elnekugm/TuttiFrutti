@@ -43,8 +43,8 @@ public:
         size_t unclaimed;        ///< Built, and no lookup has taken them yet
     };
 
-    explicit ScheduledPrebuild(VideoCommon::ShaderJobScheduler& jobs_)
-        : jobs{jobs_}, batch{jobs_.CreateBatch()} {}
+    explicit ScheduledPrebuild(VideoCommon::ShaderJobScheduler& jobs_, bool release_built_ = false)
+        : jobs{jobs_}, batch{jobs_.CreateBatch()}, release_built{release_built_} {}
 
     ~ScheduledPrebuild() {
         Stop();
@@ -94,7 +94,9 @@ public:
                             return;
                         }
                         ++built;
-                        entry->pipeline = std::move(pipeline);
+                        if (!release_built) {
+                            entry->pipeline = std::move(pipeline);
+                        }
                     };
                 },
             },
@@ -156,6 +158,12 @@ public:
         done();
     }
 
+    /// Builds ended and builds queued, for the loading screen while it waits for all of them.
+    std::pair<size_t, size_t> Progress() const {
+        std::scoped_lock lock{mutex};
+        return {built + failed, entries.size()};
+    }
+
     /// The outcome once every build has ended, else nothing
     std::optional<Outcome> Finished() const {
         if (!batch.Idle()) {
@@ -207,6 +215,8 @@ private:
 
     VideoCommon::ShaderJobScheduler& jobs;
     VideoCommon::ShaderJobBatch batch;
+    /// Precompile-only: build each pipeline for the driver cache and drop it, keeping RAM flat.
+    const bool release_built{};
     size_t translating{}; ///< Builds added and not translated yet
     Common::UniqueFunction<void> after_translations;
     size_t built{};

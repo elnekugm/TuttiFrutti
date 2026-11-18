@@ -383,6 +383,8 @@ private slots:
     void OnGameListPrepareShaderWarm(u64 program_id, const std::string& game_path);
     void OnGameListDeleteShaderWarm(u64 program_id);
     void PrepareShaderPrecache(u64 title_id, const std::filesystem::path& game_path);
+    /// Offers to compile a cache of at least 100,000 pipelines before the game starts.
+    void PrepareCachedShaderPrecompile(u64 title_id);
     void OnGameListExtractNup(const std::string& game_path);
     void OnGameListEditNupMetadata(const std::string& game_path);
     void OnGameListCopyTID(u64 program_id);

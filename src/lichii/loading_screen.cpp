@@ -170,7 +170,10 @@ void LoadingScreen::OnLoadProgress(VideoCore::LoadCallbackStage stage, std::size
         } else {
             ui->progress_bar->show();
         }
-        skip_button->setVisible(stage == VideoCore::LoadCallbackStage::Warm);
+        skip_button->setVisible(
+            stage == VideoCore::LoadCallbackStage::Warm ||
+            (stage == VideoCore::LoadCallbackStage::Build &&
+             VideoCommon::ShaderWarm::PrecompileCachedWaiting()));
         skip_button->setEnabled(true);
         previous_stage = stage;
         // reset back to fast shader compiling since the stage changed

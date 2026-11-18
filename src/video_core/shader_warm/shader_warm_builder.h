@@ -104,6 +104,17 @@ bool WarmPending(u64 title_id);
 void RequestWarmBeforeStart(bool before_start);
 bool TakeWarmBeforeStart();
 
+/// The frontend's answer to "compile this large cached set before the game starts": taken (and
+/// cleared) by the renderer when it loads. While it waits, the loading screen shows its Skip
+/// button; skipping cancels the rest and starts the game.
+void RequestPrecompileCached(bool compile);
+bool TakePrecompileCached();
+bool PrecompileCachedWaiting();
+void SetPrecompileCachedWaiting(bool waiting);
+/// A Skip pressed while the large-cache precompile waits. Separate from TakeSkipWarm so the
+/// compute precache consuming that flag cannot swallow the skip of the precompile that follows.
+bool TakePrecompileSkip();
+
 /// Skip button of the loading screen: the running precache stops after its current builds and the
 /// game starts. Taken (and cleared) by the renderer.
 void RequestSkipWarm();

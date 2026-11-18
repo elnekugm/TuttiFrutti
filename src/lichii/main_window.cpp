@@ -25,6 +25,7 @@
 #endif
 #include "updater/update_dialog.h"
 #include "video_core/shader_cache_v2/cache.h"
+#include "video_core/shader_cache_v2/cache_file.h"
 #include "video_core/shader_cache_v2/cache_share.h"
 
 #include "common/fs/ryujinx_compat.h"
@@ -2374,6 +2375,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     }
 
     PrepareShaderPrecache(title_id, std::filesystem::path{filename.toStdU16String()});
+    PrepareCachedShaderPrecompile(title_id);
     speed_limit_before_hotkeys.reset();
     Settings::LogSettings();
 
@@ -3346,6 +3348,22 @@ namespace {
 std::filesystem::path TitleShaderDir(u64 program_id) {
     return Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir) /
            fmt::format("{:016x}", program_id);
+}
+
+/// The graphics and compute pipelines a title's cache holds, for the prelaunch offer.
+std::size_t CachedPipelineCount(u64 program_id) {
+    namespace CacheV2 = VideoCommon::ShaderCacheV2;
+    std::error_code ec;
+    const auto log = TitleShaderDir(program_id) / CacheV2::FileName;
+    if (!std::filesystem::exists(log, ec)) {
+        return 0;
+    }
+    const CacheV2::LogFile file = CacheV2::ReadLogFile(log);
+    return static_cast<std::size_t>(std::ranges::count_if(
+        file.parsed.live, [](const CacheV2::LogRecord& record) {
+            return record.kind == CacheV2::RecordKind::Graphics ||
+                   record.kind == CacheV2::RecordKind::Compute;
+        }));
 }
 
 
@@ -5111,6 +5129,43 @@ void MainWindow::PrepareShaderPrecache(u64 title_id, const std::filesystem::path
         }
     }
     ShaderWarm::RequestWarmBeforeStart(true);
+}
+
+/// A cache this large is worth building before play: the loading screen shows the progress and a
+/// Skip button, and the renderer waits for every cached pipeline before the game starts.
+void MainWindow::PrepareCachedShaderPrecompile(u64 title_id) {
+    namespace ShaderWarm = VideoCommon::ShaderWarm;
+    ShaderWarm::RequestPrecompileCached(false);
+    if (title_id == 0 || !Settings::values.use_disk_shader_cache.GetValue()) {
+        return;
+    }
+    const auto mode = Settings::values.precompile_cached_shaders.GetValue();
+    if (mode == Settings::PrecompileCachedShaders::Off) {
+        return;
+    }
+    constexpr std::size_t threshold = 100000;
+    const std::size_t count = CachedPipelineCount(title_id);
+    if (count < threshold) {
+        return;
+    }
+    if (mode == Settings::PrecompileCachedShaders::Ask) {
+        QMessageBox box(QMessageBox::Question, tr("Precompile Shaders"),
+                        tr("This game's shader cache holds %1 pipelines. Compile them before "
+                           "the game starts so they don't compile while you play?")
+                            .arg(static_cast<qulonglong>(count)),
+                        QMessageBox::NoButton, this);
+        QPushButton* const compile =
+            box.addButton(tr("Precompile now"), QMessageBox::AcceptRole);
+        box.addButton(tr("Skip"), QMessageBox::RejectRole);
+        box.setDefaultButton(compile);
+        box.exec();
+        if (box.clickedButton() != compile) {
+            LOG_INFO(Frontend, "Precompiling {:016x}: skipped by the user", title_id);
+            return;
+        }
+    }
+    LOG_INFO(Frontend, "Precompiling {} cached shaders before starting {:016x}", count, title_id);
+    ShaderWarm::RequestPrecompileCached(true);
 }
 
 /// Deletes the game's precache files after a confirmation, showing the error when it fails.

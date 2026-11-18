@@ -1434,13 +1434,14 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     namespace StutterTrace = VideoCommon::StutterTrace;
     using CacheV2::RecordKind;
     using VideoCommon::ShaderJobPriority;
+    const bool precompile_all = VideoCommon::ShaderWarm::TakePrecompileCached();
     auto& jobs = *shader_jobs;
     const u32 read_properties = host_info.EnvironmentReadProperties();
 
     // The boot builds (Soon), which Loading Shaders waits for, and the background prebuild. A
     // stopped load cancels both; the workers stay for the game.
     const VideoCommon::ShaderJobBatch boot = jobs.CreateBatch();
-    scheduled_prebuild.emplace(jobs);
+    scheduled_prebuild.emplace(jobs, precompile_all);
     prebuild_load_begin.reset();
     const std::stop_callback cancel_load{
         stop_loading, [&jobs, boot, prebuild = scheduled_prebuild->Batch()] {
@@ -1581,13 +1582,16 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     size_t queued_graphics = 0;
     // build_all_cached_shaders: the rest too, in the room the recent sessions' pipelines leave
     // under the pipelines kept built
-    const bool build_all = Settings::values.build_all_cached_shaders.GetValue();
+    const bool build_all =
+        precompile_all || Settings::values.build_all_cached_shaders.GetValue();
     const size_t kept_pipelines = KeptPipelines();
     const size_t boot_used =
         used_pipelines.empty() ? MaxPipelinesWithoutUsedList : used_pipelines.size();
-    const size_t spare_pipelines = kept_pipelines == 0
-                                       ? std::numeric_limits<size_t>::max()
-                                       : kept_pipelines - std::min(kept_pipelines, boot_used);
+    const size_t spare_pipelines =
+        precompile_all ? std::numeric_limits<size_t>::max()
+                       : (kept_pipelines == 0
+                              ? std::numeric_limits<size_t>::max()
+                              : kept_pipelines - std::min(kept_pipelines, boot_used));
     size_t queued_spare = 0;
     for (const CacheV2::LogRecord* const planned : plan) {
         const CacheV2::LogRecord& record = *planned;
@@ -1636,6 +1640,12 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
             older_used.push_back({index, *key, used_age->second});
             continue;
         }
+        // A large-cache precompile builds every record on the release-after-build prebuild, not as a
+// boot pipeline kept in memory.
+        if (precompile_all) {
+            skipped_graphics.emplace_back(index, *key);
+            continue;
+        }
         const bool used = used_pipelines.empty() ? queued_graphics < MaxPipelinesWithoutUsedList
                                                  : used_age != used_pipelines.end();
         const bool spare = !used && build_all && queued_spare < spare_pipelines;
@@ -1675,7 +1685,9 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     };
     std::ranges::reverse(older_used);
     std::ranges::stable_sort(older_used, {}, &OlderUsed::age);
-    const size_t prebuild_limit = PrebuildLimit(kept_pipelines, queued_graphics);
+    const size_t prebuild_limit =
+        precompile_all ? std::numeric_limits<size_t>::max()
+                       : PrebuildLimit(kept_pipelines, queued_graphics);
     const size_t older_admitted = std::min(older_used.size(), prebuild_limit);
     const size_t older_left = older_used.size() - older_admitted;
     std::vector<PrebuildRecord> prebuild;
@@ -1978,6 +1990,34 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     if (!prebuild_with_boot) {
         start_prebuild();
         await_older();
+    }
+    // A large cache asked to be compiled before the game starts: wait for every prebuild job.
+    // The loading screen's Skip button (or a cancelled load) stops the wait and the rest starts
+    // with the game, compiling each pipeline at its first draw.
+    if (precompile_all && !stop_loading.stop_requested()) {
+        VideoCommon::ShaderWarm::SetPrecompileCachedWaiting(true);
+        bool skipped = false;
+        while (!scheduled_prebuild->Finished()) {
+            if (stop_loading.stop_requested() || VideoCommon::ShaderWarm::TakeSkipWarm() ||
+                VideoCommon::ShaderWarm::TakePrecompileSkip()) {
+                skipped = true;
+                break;
+            }
+            const auto [done, total] = scheduled_prebuild->Progress();
+            if (callback) {
+                callback(VideoCore::LoadCallbackStage::Build, done, total);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{100});
+        }
+        VideoCommon::ShaderWarm::SetPrecompileCachedWaiting(false);
+        if (skipped) {
+            scheduled_prebuild->Stop();
+        }
+    }
+    if (precompile_all) {
+        // The driver cache keeps what was built; the entries and their pipelines are not needed.
+        scheduled_prebuild->Stop();
+        QueueVulkanPipelineCacheSave();
     }
     if (compact) {
         scheduled_prebuild->AfterTranslations([this] { cache_v2->Writer().Compact(); });

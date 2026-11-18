@@ -70,6 +70,27 @@ TEST_CASE("ShaderPrecache: launch requests are taken once", "[video_core]") {
     REQUIRE(ShaderWarm::TakeWarmBeforeStart());
 }
 
+TEST_CASE("ShaderPrecache: a large cache precompile is taken once and can be skipped", "[video_core]") {
+    ShaderWarm::RequestPrecompileCached(true);
+    REQUIRE(ShaderWarm::TakePrecompileCached());
+    REQUIRE_FALSE(ShaderWarm::TakePrecompileCached());
+    REQUIRE_FALSE(ShaderWarm::PrecompileCachedWaiting());
+    ShaderWarm::SetPrecompileCachedWaiting(true);
+    REQUIRE(ShaderWarm::PrecompileCachedWaiting());
+    ShaderWarm::SetPrecompileCachedWaiting(false);
+
+    ShaderWarm::RequestSkipWarm();
+    REQUIRE(ShaderWarm::TakeSkipWarm());
+    // The compute precache takes its own skip, but the large-cache wait still sees this one.
+    REQUIRE(ShaderWarm::TakePrecompileSkip());
+    REQUIRE_FALSE(ShaderWarm::TakePrecompileSkip());
+
+    ShaderWarm::RequestSkipWarm();
+    ShaderWarm::RequestPrecompileCached(true);
+    REQUIRE_FALSE(ShaderWarm::TakePrecompileSkip());
+    REQUIRE(ShaderWarm::TakePrecompileCached());
+}
+
 TEST_CASE("ShaderPrecache: the marker matches only the same file and driver", "[video_core]") {
     TempDir dir;
     const auto warm = dir.path / "warm-compute.bin";

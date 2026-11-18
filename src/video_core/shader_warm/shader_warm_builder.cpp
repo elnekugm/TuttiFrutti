@@ -278,6 +278,9 @@ void WriteHeader(std::ofstream& out) {
 
 std::atomic<bool> warm_before_start{false};
 std::atomic<bool> skip_warm{false};
+std::atomic<bool> precompile_cached{false};
+std::atomic<bool> precompile_cached_waiting{false};
+std::atomic<bool> precompile_skip{false};
 
 /// Records `entries` for the finished precache file at `warm_file` (see WarmCountPath).
 void WriteWarmCount(const fs::path& warm_file, u64 entries) {
@@ -410,8 +413,32 @@ bool TakeWarmBeforeStart() {
     return warm_before_start.exchange(false, std::memory_order_relaxed);
 }
 
+void RequestPrecompileCached(bool compile) {
+    skip_warm.store(false, std::memory_order_relaxed);
+    precompile_skip.store(false, std::memory_order_relaxed);
+    precompile_cached_waiting.store(false, std::memory_order_relaxed);
+    precompile_cached.store(compile, std::memory_order_relaxed);
+}
+
+bool TakePrecompileCached() {
+    return precompile_cached.exchange(false, std::memory_order_relaxed);
+}
+
+bool PrecompileCachedWaiting() {
+    return precompile_cached_waiting.load(std::memory_order_relaxed);
+}
+
+void SetPrecompileCachedWaiting(bool waiting) {
+    precompile_cached_waiting.store(waiting, std::memory_order_relaxed);
+}
+
+bool TakePrecompileSkip() {
+    return precompile_skip.exchange(false, std::memory_order_relaxed);
+}
+
 void RequestSkipWarm() {
     skip_warm.store(true, std::memory_order_relaxed);
+    precompile_skip.store(true, std::memory_order_relaxed);
 }
 
 bool TakeSkipWarm() {
