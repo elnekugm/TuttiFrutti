@@ -671,7 +671,11 @@ bool RasterizerVulkan::DeltaStillHolds(u64 serial, u64 map_serial) {
     }
     // Handles computed at draw time come from memory the delta doesn't track (storage buffers).
     if (taken_draw.pipeline->ComputedHandlesChanged()) {
-        return full(FullDraw::ComputedHandles);
+        if (!VideoCommon::Nx2FastDraw::RetextureDraws() ||
+            !taken_draw.pipeline->CanRetexture() ||
+            !taken_draw.pipeline->RetextureComputed()) {
+            return full(FullDraw::ComputedHandles);
+        }
     }
     return true;
 }

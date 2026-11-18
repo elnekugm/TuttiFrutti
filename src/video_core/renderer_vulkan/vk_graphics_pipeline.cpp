@@ -1096,6 +1096,10 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         delta_computed_handles.assign(computed_handles.begin(), computed_handles.end());
         delta_computed_values.assign(computed_values.begin(), computed_values.end());
         configured_stages = Spec::enabled_stages;
+        retexture_eligible = std::ranges::all_of(stage_infos, [](const Shader::Info& info) {
+            return info.texture_buffer_descriptors.empty() &&
+                   info.image_buffer_descriptors.empty() && info.image_descriptors.empty();
+        });
         delta_views_valid = true;
         kept_images_valid = false;
         NextDeltaGeneration();
@@ -1329,10 +1333,29 @@ bool GraphicsPipeline::ComputedHandlesChanged() const {
 }
 
 bool GraphicsPipeline::SharesDeltaStateWith(const GraphicsPipeline& other) const noexcept {
-    return false;
+    return delta_blocker == other.delta_blocker && !mesh_emulation && !other.mesh_emulation &&
+           !writes_images && !other.writes_images &&
+           num_image_elements == other.num_image_elements && num_textures == other.num_textures &&
+           configured_stages == other.configured_stages &&
+           ShaderHashes() == other.ShaderHashes();
 }
 
-void GraphicsPipeline::TakeDeltaStateFrom(GraphicsPipeline& other) noexcept {}
+void GraphicsPipeline::TakeDeltaStateFrom(GraphicsPipeline& other) noexcept {
+    delta_views.swap(other.delta_views);
+    delta_samplers.swap(other.delta_samplers);
+    delta_raw_handles.swap(other.delta_raw_handles);
+    delta_computed_handles.swap(other.delta_computed_handles);
+    delta_computed_values.swap(other.delta_computed_values);
+    configured_stages = other.configured_stages;
+    kept_image_entries.swap(other.kept_image_entries);
+    kept_image_ranges = other.kept_image_ranges;
+    kept_rescaling = other.kept_rescaling;
+    kept_scale_epoch = other.kept_scale_epoch;
+    delta_views_valid = std::exchange(other.delta_views_valid, false);
+    kept_images_valid = std::exchange(other.kept_images_valid, false);
+    NextDeltaGeneration();
+    other.NextDeltaGeneration();
+}
 
 bool GraphicsPipeline::ReadRawHandles(std::vector<u32>& out, std::vector<u32>* computed) const {
     if (computed != nullptr || num_image_elements != num_textures || delta_blocker != DeltaBlocker::None) {
@@ -1394,7 +1417,106 @@ std::optional<u32> GraphicsPipeline::RetextureDelta() {
 }
 
 std::optional<u32> GraphicsPipeline::RetextureComputed() {
-    return std::nullopt;
+    if (!CanRetexture() || !VideoCommon::Nx2FastDraw::RetextureComputedDraws()) {
+        return std::nullopt;
+    }
+    u32 resolved{};
+    for (const ComputedHandle& handle : delta_computed_handles) {
+        const Shader::Info& info{stage_infos[handle.stage]};
+        const auto& cbufs{maxwell3d->state.shader_stages[handle.stage].const_buffers};
+        u32 program{};
+        switch (handle.kind) {
+        case TextureBuffer:
+            program = info.texture_buffer_descriptors[handle.descriptor].handle_program;
+            break;
+        case ImageBuffer:
+            program = info.image_buffer_descriptors[handle.descriptor].handle_program;
+            break;
+        case Texture:
+            program = info.texture_descriptors[handle.descriptor].handle_program;
+            break;
+        default:
+            program = info.image_descriptors[handle.descriptor].handle_program;
+            break;
+        }
+        const auto base = [&]() -> std::optional<u32> {
+            u32 views{};
+            const auto add_all = [&](const auto& descs) {
+                for (const auto& desc : descs) {
+                    views += desc.count;
+                }
+            };
+            const auto add_before = [&](const auto& descs) {
+                for (u32 i = 0; i < handle.descriptor; ++i) {
+                    views += descs[i].count;
+                }
+            };
+            for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+                if (!configured_stages[stage]) {
+                    continue;
+                }
+                const Shader::Info& stage_info{stage_infos[stage]};
+                if (stage < handle.stage) {
+                    add_all(stage_info.texture_buffer_descriptors);
+                    add_all(stage_info.image_buffer_descriptors);
+                    add_all(stage_info.texture_descriptors);
+                    add_all(stage_info.image_descriptors);
+                    continue;
+                }
+                switch (handle.kind) {
+                case TextureBuffer:
+                    add_before(stage_info.texture_buffer_descriptors);
+                    return views;
+                case ImageBuffer:
+                    add_all(stage_info.texture_buffer_descriptors);
+                    add_before(stage_info.image_buffer_descriptors);
+                    return views;
+                case Texture:
+                    add_all(stage_info.texture_buffer_descriptors);
+                    add_all(stage_info.image_buffer_descriptors);
+                    add_before(stage_info.texture_descriptors);
+                    return views;
+                default:
+                    add_all(stage_info.texture_buffer_descriptors);
+                    add_all(stage_info.image_buffer_descriptors);
+                    add_all(stage_info.texture_descriptors);
+                    add_before(stage_info.image_descriptors);
+                    return views;
+                }
+            }
+            return std::nullopt;
+        }();
+        if (!base) {
+            return std::nullopt;
+        }
+        std::vector<u32> elements;
+        std::vector<u32> raws;
+        std::vector<std::pair<u32, u32>> values;
+        VideoCommon::EvaluateTextureHandles(
+            info, program, *gpu_memory,
+            [&](u32 cbuf) -> GPUVAddr {
+                return cbuf < cbufs.size() && cbufs[cbuf].enabled ? cbufs[cbuf].address
+                                                                  : GPUVAddr{};
+            },
+            device.GetStorageBufferAlignment(), handle.count, [&](u32 element, u32 value) {
+                if (value != delta_computed_values[handle.first_value + element]) {
+                    elements.push_back(*base + element);
+                    raws.push_back(value);
+                    values.emplace_back(handle.first_value + element, value);
+                }
+            });
+        if (!elements.empty()) {
+            if (!ResolveChangedViews(std::span(elements.data(), elements.size()),
+                                     std::span(raws.data(), raws.size()))) {
+                return std::nullopt;
+            }
+            for (const auto& [index, value] : values) {
+                delta_computed_values[index] = value;
+            }
+            resolved += static_cast<u32>(elements.size());
+        }
+    }
+    return resolved;
 }
 
 bool GraphicsPipeline::ResolveChangedViews(std::span<const u32> elements,
