@@ -61,7 +61,8 @@ inline constexpr std::array<const char*, static_cast<size_t>(Reason::Count)> rea
     "memory map",
 };
 
-inline std::atomic<bool> g_enabled{true};
+/// Read by every thread: on its own cache line, away from the serials the breaks bump.
+alignas(64) inline std::atomic<bool> g_enabled{true};
 
 /// Whether vertex stream strides and enables are dynamic state (extended dynamic state and
 /// dynamic vertex input): then no pipeline depends on them and they are draw parameters. Set by
@@ -139,12 +140,22 @@ inline u64 MemorySerial() {
 }
 
 /// Older call sites that note a guest sync. Under the memory-serial model a sync is a memory
-/// break: it is conservative, and keeps the buffer cache's uniform keeps valid.
+/// break: it is conservative, and keeps the buffer cache's uniform keeps valid. As with the
+/// breaks, the thread that reads the serial between syncs skips the locked add once it bumped
+/// it since that read (every method of another engine notes a sync).
+inline thread_local bool t_reads_sync_serial{};
+inline thread_local bool t_sync_serial_bumped{};
+
 inline void NoteSync() {
-    g_memory_serial.fetch_add(1, std::memory_order_relaxed);
+    if (!(t_reads_sync_serial && t_sync_serial_bumped)) {
+        g_memory_serial.fetch_add(1, std::memory_order_relaxed);
+        t_sync_serial_bumped = t_reads_sync_serial;
+    }
 }
 
 [[nodiscard]] inline u64 SyncSerial() {
+    t_reads_sync_serial = true;
+    t_sync_serial_bumped = false;
     return g_memory_serial.load(std::memory_order_acquire);
 }
 
