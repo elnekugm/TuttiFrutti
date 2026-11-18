@@ -442,8 +442,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $bin = 'build/release/bin'
-          foreach ($exe in 'TuttiFrutti.exe', 'TuttiFrutti-updater.exe', 'nx2_switches.txt') {
-            if (-not (Test-Path "$bin/$exe")) { throw "$bin/$exe was not produced" }
+          foreach ($file in 'TuttiFrutti.exe', 'TuttiFrutti-updater.exe', 'nx2_switches.txt',
+                            'qt.conf', 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll',
+                            'Qt6Network.dll', 'plugins/platforms/qwindows.dll') {
+            if (-not (Test-Path "$bin/$file")) { throw "$bin/$file was not produced" }
           }
           $unexpected = Get-ChildItem $bin -File | Where-Object {
             $_.Name -in @('TuttiFrutti-cli.exe', 'tests.exe') -or
@@ -451,14 +453,23 @@ jobs:
           }
           if ($unexpected) { throw "Test, CLI or benchmark binaries were built: $unexpected" }
 
+          # lichii's POST_BUILD windeployqt already copied Qt and its plugins into plugins/, which is
+          # what qt.conf uses. Running it again would duplicate every plugin at the root.
           Get-ChildItem $bin -Recurse -File -Include *.pdb,*.profraw,*.profdata,*.ilk,*.lib,*.exp,*.obj,*.a |
             Remove-Item -Force
           Remove-Item "$bin/vc_redist.x64.exe" -Force -ErrorAction SilentlyContinue
 
-          windeployqt --release --compiler-runtime --no-translations "$bin/TuttiFrutti.exe"
-          Get-ChildItem $bin -Recurse -File -Include *.pdb,*.profraw,*.profdata |
-            Remove-Item -Force
-          Remove-Item "$bin/vc_redist.x64.exe" -Force -ErrorAction SilentlyContinue
+          # The build uses the DLL runtime (/MD), so ship the MSVC CRT files it imports. Windows
+          # itself provides only the UCRT (api-ms-win-crt-*), not VCRUNTIME140 or MSVCP140.
+          if (-not $env:VCToolsRedistDir) { throw "VCToolsRedistDir is not set; MSVC setup did not run" }
+          $crtRoot = Join-Path $env:VCToolsRedistDir 'x64'
+          $crt = Get-ChildItem $crtRoot -Directory -Filter 'Microsoft.VC*.CRT' |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $crt) { throw "No MSVC CRT redistributable under $crtRoot" }
+          Copy-Item (Join-Path $crt.FullName '*.dll') $bin -Force
+          foreach ($dll in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
+            if (-not (Test-Path "$bin/$dll")) { throw "$dll was not copied from $($crt.FullName)" }
+          }
 
           # Portable profile: this folder beside TuttiFrutti.exe keeps the config, saves and cache
           # here, and the first start offers to import the previous profile.
@@ -502,14 +513,17 @@ jobs:
           $names = $archive.Entries.FullName | Sort-Object
           $archive.Dispose()
           foreach ($required in 'TuttiFrutti.exe', 'TuttiFrutti-updater.exe', 'nx2_switches.txt',
+                                'qt.conf', 'vcruntime140.dll', 'msvcp140.dll',
+                                'plugins/platforms/qwindows.dll',
                                 'LICENSE.txt', 'README.md', 'user/LEEME.txt') {
             if ($names -notcontains $required) { throw "$zip is missing $required" }
           }
           $bad = $names | Where-Object {
             $_ -match '(^|/)(tests|.*_tests|.*bench.*|TuttiFrutti-cli)(\.exe)?$' -or
-            $_ -match '\.(pdb|profraw|profdata|ilk|lib|exp|obj|a|h)$'
+            $_ -match '\.(pdb|profraw|profdata|ilk|lib|exp|obj|a|h)$' -or
+            $_ -match '^(generic|iconengines|imageformats|networkinformation|platforms|styles|tls)/'
           }
-          if ($bad) { throw "Development files in ${zip}: $bad" }
+          if ($bad) { throw "Development files or duplicate Qt plugin folders in ${zip}: $bad" }
           "Windows zip contents ($($names.Count) entries):"
           $names
           Get-Item $zip | Select-Object Name, Length
