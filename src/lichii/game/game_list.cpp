@@ -18,7 +18,13 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QList>
+#include <QDialog>
+#include <QFile>
 #include <QListView>
+#include <QMessageBox>
+#include <QPointer>
+#include <QProgressDialog>
+#include <QTimer>
 #include <QMenu>
 #include <QScrollBar>
 #include <QScroller>
@@ -42,6 +48,8 @@
 #include "qt_common/config/uisettings.h"
 #include "qt_common/game_list/game_list_p.h"
 #include "qt_common/game_list/model.h"
+#include "lichii/art/launchbox.h"
+#include "lichii/art/launchbox_dialog.h"
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
 #include "lichii/game/carousel.h"
@@ -459,6 +467,146 @@ void GameList::QueueArtworkLookup(u64 program_id, const QString& title, bool for
     StartArtworkLookups();
 }
 
+void GameList::UpdateLaunchBoxArtDatabase(std::function<void(bool)> done) {
+    const QString index = LaunchBox::DefaultIndexPath();
+    const QString zip = index + QStringLiteral(".zip");
+
+    auto* progress = new QProgressDialog(
+        tr("Downloading the LaunchBox art database (about 110 MB)…"), tr("Cancel"), 0, 0, this);
+    progress->setWindowTitle(tr("LaunchBox art database"));
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+
+    auto cancel = std::make_shared<std::atomic_bool>(false);
+    auto received = std::make_shared<std::atomic<qint64>>(0);
+    auto total = std::make_shared<std::atomic<qint64>>(0);
+    connect(progress, &QProgressDialog::canceled, this, [cancel] { cancel->store(true); });
+
+    auto* ticker = new QTimer(progress);
+    connect(ticker, &QTimer::timeout, progress, [progress, received, total] {
+        const qint64 now = received->load();
+        const qint64 all = total->load();
+        if (all > 0) {
+            progress->setMaximum(100);
+            progress->setValue(int(now * 100 / all));
+            progress->setLabelText(
+                tr("%1 of %2 MiB").arg(now >> 20).arg(all >> 20));
+        } else {
+            progress->setLabelText(tr("%1 MiB").arg(now >> 20));
+        }
+    });
+    ticker->start(200);
+
+    auto* watcher = new QFutureWatcher<QString>(this);
+    connect(watcher, &QFutureWatcher<QString>::finished, this,
+            [this, watcher, progress, done] {
+                const QString error = watcher->result();
+                watcher->deleteLater();
+                progress->close();
+                progress->deleteLater();
+                if (!error.isEmpty()) {
+                    QMessageBox::warning(this, tr("LaunchBox art database"), error);
+                    if (done) {
+                        done(false);
+                    }
+                    return;
+                }
+                LOG_INFO(Frontend, "LaunchBox art database updated");
+                if (done) {
+                    done(true);
+                }
+            });
+    watcher->setFuture(QtConcurrent::run([index, zip, cancel, received, total] {
+        QString error;
+        if (!QDir().mkpath(QFileInfo(index).absolutePath())) {
+            return QStringLiteral("Cannot create the art cache folder.");
+        }
+        if (!LaunchBox::DownloadMetadata(
+                zip, *cancel, &error,
+                [cancel, received, total](qint64 got, qint64 all) {
+                    received->store(got);
+                    total->store(all);
+                    return !cancel->load();
+                })) {
+            return error;
+        }
+        QVector<LaunchBox::Game> games;
+        if (!LaunchBox::BuildIndexFromZip(zip, &games, &error) ||
+            !LaunchBox::SaveIndex(games, index, &error)) {
+            QFile::remove(zip);
+            return error;
+        }
+        QFile::remove(zip);
+        return QString{};
+    }));
+}
+
+void GameList::LookUpLaunchBoxArt(u64 program_id) {
+    const QString title = GameTitle(program_id);
+    if (program_id == 0 || title.trimmed().isEmpty()) {
+        return;
+    }
+    const QString index = LaunchBox::DefaultIndexPath();
+    if (!QFile::exists(index)) {
+        if (QMessageBox::question(
+                this, tr("LaunchBox artwork"),
+                tr("The LaunchBox art database has not been downloaded yet (about 110 MB).\n\n"
+                   "Download it now?"),
+                QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) {
+            return;
+        }
+        UpdateLaunchBoxArtDatabase([this, program_id](bool ok) {
+            if (ok) {
+                LookUpLaunchBoxArt(program_id);
+            }
+        });
+        return;
+    }
+
+    const QString platform = (program_id >> 56) == 0x04 ? QStringLiteral("Nintendo Switch 2")
+                                                        : QStringLiteral("Nintendo Switch");
+
+    struct Result {
+        QString error;
+        QVector<LaunchBox::Candidate> candidates;
+    };
+    auto* watcher = new QFutureWatcher<Result>(this);
+    connect(watcher, &QFutureWatcher<Result>::finished, this, [this, watcher, program_id] {
+        const Result result = watcher->result();
+        watcher->deleteLater();
+        if (!result.error.isEmpty()) {
+            QMessageBox::warning(this, tr("LaunchBox artwork"), result.error);
+            return;
+        }
+        if (result.candidates.isEmpty()) {
+            QMessageBox::information(this, tr("LaunchBox artwork"),
+                                     tr("No matching artwork was found."));
+            return;
+        }
+        LaunchBoxArtDialog dialog(this, GameTitle(program_id), result.candidates);
+        if (dialog.exec() != QDialog::Accepted || dialog.Image().isNull()) {
+            return;
+        }
+        if (!QtCommon::Game::SaveCustomArtwork(program_id, dialog.Image())) {
+            QMessageBox::warning(this, tr("LaunchBox artwork"),
+                                 tr("The artwork could not be saved."));
+            return;
+        }
+        LOG_INFO(Frontend, "LaunchBox artwork saved for {:016X}", program_id);
+        ShowCustomArtwork(program_id);
+    });
+    watcher->setFuture(QtConcurrent::run([index, platform, title] {
+        Result result;
+        QVector<LaunchBox::Game> games;
+        if (!LaunchBox::LoadIndex(index, &games, &result.error)) {
+            return result;
+        }
+        result.candidates = LaunchBox::Rank(title, platform, games, 20,
+                                            LaunchBox::LoadAliases(LaunchBox::DefaultAliasesPath()));
+        return result;
+    }));
+}
+
 void GameList::StartArtworkLookups() {
     while (artwork_running < MaxParallelLookups && !artwork_queue.isEmpty()) {
         ArtworkLookup lookup = artwork_queue.takeFirst();
@@ -841,6 +989,13 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     QAction* lookup_artwork = context_menu.addAction(tr("Look up artwork on SteamGridDB"));
     lookup_artwork->setVisible(program_id != 0);
     lookup_artwork->setEnabled(!UISettings::values.steamgriddb_api_key.GetValue().empty());
+    QAction* launchbox_artwork = context_menu.addAction(tr("Look up artwork on LaunchBox…"));
+    launchbox_artwork->setVisible(program_id != 0);
+    connect(launchbox_artwork, &QAction::triggered, this,
+            [this, program_id] { LookUpLaunchBoxArt(program_id); });
+    QAction* launchbox_update =
+        context_menu.addAction(tr("Update the LaunchBox art database…"));
+    connect(launchbox_update, &QAction::triggered, this, [this] { UpdateLaunchBoxArtDatabase(); });
     QAction* properties = context_menu.addAction(tr("Configure Game"));
     const std::array<std::pair<QAction*, const char*>, 22> icons{{
         {favorite, "star"},

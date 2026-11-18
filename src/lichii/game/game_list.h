@@ -18,6 +18,7 @@
 #include <QVBoxLayout>
 #include <QVector>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <QWidget>
 
@@ -168,6 +169,10 @@ private:
     void QueueArtworkLookups();
     /// Queues one game; forced lookups run again and replace existing custom artwork.
     void QueueArtworkLookup(u64 program_id, const QString& title, bool forced);
+    /// LaunchBox: searches the local index and lets the player choose the box art.
+    void LookUpLaunchBoxArt(u64 program_id);
+    /// Downloads Metadata.zip and rebuilds the Switch-only index; done(true) on success.
+    void UpdateLaunchBoxArtDatabase(std::function<void(bool)> done = {});
     void StartArtworkLookups();
     /// Shows the program's custom artwork in every library entry of it, without a rescan.
     void ShowCustomArtwork(u64 program_id);

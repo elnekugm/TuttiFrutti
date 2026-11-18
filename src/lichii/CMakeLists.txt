@@ -21,6 +21,12 @@ add_executable(lichii
     about_dialog.cpp
     about_dialog.h
     aboutdialog.ui
+    art/launchbox.cpp
+    art/launchbox.h
+    art/launchbox_dialog.cpp
+    art/launchbox_dialog.h
+    art/launchbox_net.cpp
+    art/launchbox_net.h
     applets/qt_amiibo_settings.cpp
     applets/qt_amiibo_settings.h
     applets/qt_amiibo_settings.ui

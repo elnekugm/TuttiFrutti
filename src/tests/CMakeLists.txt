@@ -316,6 +316,17 @@ target_link_libraries(ncz_tests PRIVATE common OpenSSL::Crypto zstd::zstd
     ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain Threads::Threads)
 add_test(NAME ncz_tests COMMAND ncz_tests)
 
+if (ENABLE_QT AND TARGET Qt6::Core)
+    add_executable(launchbox_art_tests
+        core/launchbox_art.cpp
+        ../lichii/art/launchbox.cpp
+        ../lichii/art/launchbox_net.cpp)
+    target_include_directories(launchbox_art_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(launchbox_art_tests PRIVATE common Catch2::Catch2WithMain Qt6::Core
+                          Qt6::Gui QuaZip::QuaZip OpenSSL::SSL OpenSSL::Crypto)
+    add_test(NAME launchbox_art_tests COMMAND launchbox_art_tests)
+endif()
+
 if (TARGET dynarmic::dynarmic)
     target_sources(tests PRIVATE core/jit_codegen_options.cpp core/jit_ordered_loads.cpp core/jit_shared_code.cpp core/jit_warmup.cpp core/window_trace.cpp)
     target_link_libraries(tests PRIVATE dynarmic::dynarmic)
