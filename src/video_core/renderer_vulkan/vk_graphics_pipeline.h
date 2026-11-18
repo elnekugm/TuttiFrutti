@@ -357,6 +357,52 @@ public:
     /// views and samplers resolved from the old one.
     [[nodiscard]] bool ComputedHandlesChanged() const;
 
+    /// Whether `other` resolves the same image views, samplers and image descriptors from the same
+    /// constant buffer words: the same stages, and the same texture and image descriptors in each
+    /// (the same shaders when a handle is computed at draw time). What one kept for delta draws
+    /// then stands for the other.
+    [[nodiscard]] bool SharesDeltaStateWith(const GraphicsPipeline& other) const noexcept;
+
+    /// Takes what `other` (SharesDeltaStateWith) kept for delta draws; `other` keeps nothing.
+    void TakeDeltaStateFrom(GraphicsPipeline& other) noexcept;
+
+    /// Changes whenever what the pipeline keeps for delta draws changes, unique among pipelines.
+    [[nodiscard]] u64 DeltaGeneration() const noexcept {
+        return delta_generation;
+    }
+
+    void NextDeltaGeneration() noexcept {
+        ++delta_generation;
+    }
+
+    /// Whether RetextureDelta can bring the kept views up to date.
+    [[nodiscard]] bool CanRetexture() const noexcept {
+        return (texture_memo_eligible ||
+                (retexture_eligible && VideoCommon::Nx2FastDraw::RetextureComputedDraws())) &&
+               TakesDeltaDraws();
+    }
+
+    [[nodiscard]] bool HasComputedHandles() const noexcept {
+        return !delta_computed_handles.empty();
+    }
+
+    /// ConfigureDelta keeps the texture buffers bound, which a draw of another pipeline may have
+    /// left in this one's stages (the rasterizer's RevisitDraw). CanRetexture pipelines bind none:
+    /// unbinds them, as Configure does.
+    void UnbindStageTextureBuffers() {
+        for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+            if (configured_stages[stage]) {
+                buffer_cache.UnbindGraphicsTextureBuffers(stage);
+            }
+        }
+    }
+
+    /// Reads (or computes) every handle again and resolves the views and samplers of those that
+    /// changed, keeping the others. Returns how many it resolved, or nothing (resolve in full).
+    std::optional<u32> RetextureDelta();
+    std::optional<u32> RetextureComputed();
+    bool ResolveChangedViews(std::span<const u32> elements, std::span<const u32> raws);
+
     /// Why TakesDeltaDraws is false (diagnostics).
     enum class DeltaBlocker : u8 {
         None,
@@ -477,6 +523,8 @@ private:
 
     DeltaBlocker delta_blocker{};
     bool delta_views_valid{};
+    bool retexture_eligible{};
+    u64 delta_generation{};
     bool capture_delta{};
     bool verify_delta{};
     bool delta_mismatch{};
@@ -491,6 +539,9 @@ private:
         handle_word_index{};
     std::vector<VideoCommon::ImageViewInOut> delta_views;
     std::vector<VideoCommon::SamplerId> delta_samplers;
+    std::vector<u32> delta_raw_handles;
+    std::vector<u32> retexture_handles;
+    std::vector<u32> retexture_computed;
     /// A descriptor whose handles the captured Configure computed at draw time: the descriptor
     /// (stage, kind as ComputedHandleKind, index in its list) and its elements' values, count of
     /// them from delta_computed_values[first_value].
