@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
@@ -136,23 +137,25 @@ protected:
         }
     }
 
-    /// Called by the one thread that records reports (the GPU thread, or the split's back while it
-    /// runs). Free ids are taken from `reusable`, which only this thread touches, and moved there
-    /// from `old_queries` in batches: one lock per batch instead of one per query (a report per
-    /// draw builds two).
+    /// Called by the one thread that records reports. Free ids are taken from `reusable`, which
+    /// only this thread touches, and moved there from `old_queries` in batches: one lock per
+    /// batch instead of one per query (a report per draw builds two).
     template <typename... Args, typename = decltype(QueryType(std::declval<Args>()...))>
     size_t BuildQuery(Args&&... args) {
         if (reusable_head == reusable.size()) {
             reusable.clear();
             reusable_head = 0;
             std::scoped_lock lk(guard);
-            if (old_queries.empty()) {
+            if (old_queries_head == old_queries.size()) {
                 const size_t new_id = slot_queries.size();
                 slot_queries.emplace_back(std::forward<Args>(args)...);
                 return new_id;
             }
             // Oldest first, as they were freed.
             reusable.swap(old_queries);
+            reusable_head = old_queries_head;
+            old_queries.clear();
+            old_queries_head = 0;
         }
         const size_t new_id = reusable[reusable_head++];
         new (&slot_queries[new_id]) QueryType(std::forward<Args>(args)...);
@@ -162,6 +165,11 @@ protected:
     void ReleaseQuery(size_t query_id) {
 
         if (query_id < slot_queries.size()) {
+            if (old_queries_head >= 1024 && old_queries_head * 2 >= old_queries.size()) {
+                old_queries.erase(old_queries.begin(),
+                                  old_queries.begin() + static_cast<std::ptrdiff_t>(old_queries_head));
+                old_queries_head = 0;
+            }
             old_queries.push_back(query_id);
             return;
         }
@@ -170,9 +178,10 @@ protected:
 
     std::mutex guard;
     std::deque<QueryType> slot_queries;
-    /// Free ids, oldest first, until BuildQuery takes them all: MSVC's deque of size_t allocated
-    /// a block every two pushes, and a report per draw frees two queries.
+    /// Free ids, oldest first from old_queries_head: MSVC's deque of size_t allocated a block
+    /// every two pushes, and a report per draw frees two queries.
     std::vector<size_t> old_queries;
+    size_t old_queries_head{};
     /// Free ids BuildQuery took from old_queries, used from reusable_head (its thread only).
     std::vector<size_t> reusable;
     size_t reusable_head{};
