@@ -148,6 +148,53 @@ inline void NoteSync() {
     return g_memory_serial.load(std::memory_order_acquire);
 }
 
+/// Whether a draw after only 3D register changes (or another draw kind or vertex attribute
+/// types) looks its pipeline up and keeps the previous draw's views, samplers and image
+/// descriptors when that pipeline resolves them alike. EDEN_NX2_TEST_RELOOKUP=0 (TEST): such
+/// draws resolve in full.
+[[nodiscard]] inline bool RelookupDraws() {
+    static const bool relookup = [] {
+        const char* value = std::getenv("EDEN_NX2_TEST_RELOOKUP");
+        return value == nullptr || value[0] != '0';
+    }();
+    return relookup;
+}
+
+/// Whether a draw after texture handle writes or rebinds (or computed handle changes) reads the
+/// handles again and resolves only the ones that changed, keeping the rest as a delta draw does.
+/// EDEN_NX2_TEST_RETEXTURE=0 (TEST): such draws resolve in full.
+[[nodiscard]] inline bool RetextureDraws() {
+    static const bool retexture = [] {
+        const char* value = std::getenv("EDEN_NX2_TEST_RETEXTURE");
+        return value == nullptr || value[0] != '0';
+    }();
+    return retexture;
+}
+
+/// Whether a draw whose pipeline differs from the previous draw's (or follows a draw that can't
+/// be followed by delta draws) keeps what that pipeline resolved at its own last recorded draw,
+/// while no memory, mapping, texture pool register, command buffer or render pass changed since.
+/// EDEN_NX2_TEST_REVISIT=0 (TEST): such draws resolve in full.
+[[nodiscard]] inline bool RevisitDraws() {
+    static const bool revisit = [] {
+        const char* value = std::getenv("EDEN_NX2_TEST_REVISIT");
+        return value == nullptr || value[0] != '0';
+    }();
+    return revisit;
+}
+
+/// Whether RetextureDraws covers pipelines with texture handles computed at draw time or read
+/// from two words. EDEN_NX2_TEST_RETEXTURE_COMPUTED=0 (TEST): only pipelines whose handles are
+/// all single constant buffer words.
+inline bool g_test_toggled{};
+[[nodiscard]] inline bool RetextureComputedDraws() {
+    static const bool computed = [] {
+        const char* value = std::getenv("EDEN_NX2_TEST_RETEXTURE_COMPUTED");
+        return value == nullptr || value[0] != '0';
+    }();
+    return computed && !g_test_toggled;
+}
+
 /// The device memory a GPU range maps to. A write through another GPU address that maps the
 /// same device memory changes the range too.
 class DeviceSpans {
