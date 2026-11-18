@@ -20,12 +20,12 @@ Both packages are x86-64 compiled for AVX2 (`x86-64-v3`) with profile-guided opt
 
 | Platform | Package | Notes |
 | --- | --- | --- |
-| Windows x64 | `lichii-windows-x86_64-pgo.zip` | Extract the whole zip and run `lichii.exe` |
-| Linux x64 | `lichii-linux-x86_64-pgo.AppImage` | `chmod +x` and run; needs glibc 2.39+ (CachyOS, Arch, Ubuntu 24.04, Fedora 40, Debian 13) |
+| Windows x64 | `TuttiFrutti-windows-x86_64-pgo.zip` | Extract the whole zip and run `TuttiFrutti.exe` |
+| Linux x64 | `TuttiFrutti-linux-x86_64-pgo.AppImage` | `chmod +x` and run; needs glibc 2.39+ (CachyOS, Arch, Ubuntu 24.04, Fedora 40, Debian 13) |
 
 ### Portable profile
 
-The Windows zip ships an empty `user` folder beside `lichii.exe`. While that folder exists, the emulator keeps its configuration, saves, NAND, shaders and logs there instead of in `%APPDATA%\lichii`, and the first start offers to import the profile of a previous emulator (Lichii, Eden, Yuzu and others). Delete or rename `user` to go back to the normal per-user profile.
+The Windows zip ships an empty `user` folder beside `TuttiFrutti.exe`. While that folder exists, the emulator keeps its configuration, saves, NAND, shaders and logs there instead of in `%APPDATA%\lichii`, and the first start offers to import the profile of a previous emulator (Lichii, Eden, Yuzu and others). Delete or rename `user` to go back to the normal per-user profile.
 
 The Linux AppImage uses the normal profile under `$XDG_DATA_HOME` (usually `~/.local/share/lichii`).
 
@@ -39,7 +39,7 @@ The Linux AppImage uses the normal profile under `$XDG_DATA_HOME` (usually `~/.l
 
 ## Building
 
-The build guide is in [docs/Build.md](docs/Build.md). The GUI target is `lichii`; its output is `lichii.exe` on Windows and `lichii` elsewhere.
+The build guide is in [docs/Build.md](docs/Build.md). The GUI target is `lichii`; its output is `TuttiFrutti.exe` on Windows and `TuttiFrutti` elsewhere.
 
 For the release configuration used here:
 

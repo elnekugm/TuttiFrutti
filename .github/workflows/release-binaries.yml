@@ -447,7 +447,7 @@ jobs:
       # own exclude list lacks libvulkan.so.1, which fsr4-vk and the -pgo builds' libplacebo link,
       # so it is excluded by name: the bundled loader replaced the system one and failed Vulkan
       # init (#1767). The AppImage packs that folder into one file; the tar.gz holds the same
-      # folder for systems without FUSE, with lichii and eden-cli links at its top. Both run on
+      # folder for systems without FUSE, with TuttiFrutti and TuttiFrutti-cli links at its top. Both run on
       # glibc 2.39+ systems. A tar.gz of the bare programs needed the Qt 6.8 they were built
       # against installed system-wide (#901).
       - name: Package Linux AppImage and tar.gz
@@ -455,9 +455,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x build/release/bin/lichii
-          test -x build/release/bin/eden-cli
-          strip build/release/bin/lichii build/release/bin/eden-cli
+          test -x build/release/bin/TuttiFrutti
+          test -x build/release/bin/TuttiFrutti-cli
+          strip build/release/bin/TuttiFrutti build/release/bin/TuttiFrutti-cli
           tools="$RUNNER_TEMP/linuxdeploy"
           mkdir -p "$tools"
           arch=$(uname -m)   # aarch64 or x86_64
@@ -476,7 +476,7 @@ jobs:
           export EXTRA_PLATFORM_PLUGINS='libqwayland-egl.so;libqwayland-generic.so'
           # Embedded in the AppImage metadata; matches the release tag (build-N) plus the commit.
           export LDAI_VERSION="${{ inputs.release_tag }}-${GITHUB_SHA::7}"
-          export LDAI_OUTPUT="lichii-${GITHUB_SHA}-${{ matrix.platform }}.AppImage"
+          export LDAI_OUTPUT="TuttiFrutti-${GITHUB_SHA}-${{ matrix.platform }}.AppImage"
           export OUTPUT="$LDAI_OUTPUT"
           export ARCH="$arch"
           mkdir -p AppDir/usr/bin AppDir/usr/share/licenses
@@ -489,8 +489,8 @@ jobs:
             fsr4_library=(--library "$RUNNER_TEMP/fsr4-vk/$fsr4")
           fi
           "$tools/linuxdeploy-$arch.AppImage" --appdir AppDir \
-            --executable build/release/bin/lichii \
-            --executable build/release/bin/eden-cli \
+            --executable build/release/bin/TuttiFrutti \
+            --executable build/release/bin/TuttiFrutti-cli \
             "${fsr4_library[@]}" \
             --exclude-library 'libvulkan.so*' \
             --desktop-file dist/io.github.zortos293.lichii.desktop \
@@ -500,33 +500,33 @@ jobs:
           test -s "$LDAI_OUTPUT"
           ls -la "$LDAI_OUTPUT"
           test -f AppDir/usr/bin/qt.conf
-          mv AppDir lichii
-          ln -s usr/bin/lichii lichii/lichii
-          ln -s usr/bin/eden-cli lichii/eden-cli
-          tar -czf "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" lichii
-          ls -la "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz"
-          if tar -tzf "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" | grep '/libvulkan\.so'; then
+          mv AppDir TuttiFrutti
+          ln -s usr/bin/TuttiFrutti TuttiFrutti/TuttiFrutti
+          ln -s usr/bin/TuttiFrutti-cli TuttiFrutti/TuttiFrutti-cli
+          tar -czf "TuttiFrutti-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" TuttiFrutti
+          ls -la "TuttiFrutti-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz"
+          if tar -tzf "TuttiFrutti-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" | grep '/libvulkan\.so'; then
             echo "::error::The package bundles the Vulkan loader"
             exit 1
           fi
           # Both x86-64 packages must carry fsr4-vk and its licences.
           if [ "$arch" = x86_64 ]; then
-            test "$(tar -tzf "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" |
-              grep -cFx -e "lichii/usr/lib/$fsr4" -e lichii/usr/share/licenses/fsr4-vk/LICENSE \
-                -e lichii/usr/share/licenses/fsr4-vk/AMD-FidelityFX-SDK-license.md)" = 3
+            test "$(tar -tzf "TuttiFrutti-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" |
+              grep -cFx -e "TuttiFrutti/usr/lib/$fsr4" -e TuttiFrutti/usr/share/licenses/fsr4-vk/LICENSE \
+                -e TuttiFrutti/usr/share/licenses/fsr4-vk/AMD-FidelityFX-SDK-license.md)" = 3
             extract="$RUNNER_TEMP/appimage-check"
             mkdir -p "$extract"
             (cd "$extract" &&
               "$GITHUB_WORKSPACE/$LDAI_OUTPUT" --appimage-extract "usr/lib/$fsr4" > /dev/null)
-            cmp "$extract/squashfs-root/usr/lib/$fsr4" "lichii/usr/lib/$fsr4"
-            nm -D --defined-only "lichii/usr/lib/$fsr4" | grep -w ffxCreateContext
+            cmp "$extract/squashfs-root/usr/lib/$fsr4" "TuttiFrutti/usr/lib/$fsr4"
+            nm -D --defined-only "TuttiFrutti/usr/lib/$fsr4" | grep -w ffxCreateContext
           fi
 
       - name: Package Windows binary
         if: startsWith(matrix.platform, 'windows')
         shell: pwsh
         run: |
-          foreach ($exe in 'lichii.exe', 'eden-cli.exe') {
+          foreach ($exe in 'TuttiFrutti.exe', 'TuttiFrutti-cli.exe') {
             if (-not (Test-Path "build/release/bin/$exe")) {
               throw "build/release/bin/$exe was not produced"
             }
@@ -534,18 +534,18 @@ jobs:
           # Symbols ship as their own artifact, not in the release zip.
           New-Item -ItemType Directory -Force build/release/symbols | Out-Null
           Move-Item build/release/bin/*.pdb build/release/symbols/
-          windeployqt --release --no-translations build/release/bin/lichii.exe
-          # Portable profile: this folder beside lichii.exe keeps the config, saves and cache
+          windeployqt --release --no-translations build/release/bin/TuttiFrutti.exe
+          # Portable profile: this folder beside TuttiFrutti.exe keeps the config, saves and cache
           # here, and the first start offers to import the previous profile.
           New-Item -ItemType Directory -Force build/release/bin/user | Out-Null
           @(
             'TuttiFrutti portable / portátil',
             '',
             'Esta carpeta "user" guarda la configuración, partidas, NAND y caché del emulador aquí,',
-            'junto a lichii.exe, en vez de en %APPDATA%\lichii.',
+            'junto a TuttiFrutti.exe, en vez de en %APPDATA%\lichii.',
             '',
             'This "user" folder keeps the emulator config, saves, NAND and cache here next to',
-            'lichii.exe instead of in %APPDATA%\lichii. Delete or rename it to use the normal profile.'
+            'TuttiFrutti.exe instead of in %APPDATA%\lichii. Delete or rename it to use the normal profile.'
           ) | Set-Content -Path build/release/bin/user/LEEME.txt -Encoding utf8
           if (Get-ChildItem -Recurse build/release/bin -Filter 'GFSDK_*') {
             throw 'build/release/bin holds Nsight Aftermath files, which must not ship'
@@ -560,12 +560,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app=build/release/bin/lichii.app
-          test -x "$app/Contents/MacOS/lichii"
-          test -x build/release/bin/eden-cli
-          cp build/release/bin/eden-cli "$app/Contents/MacOS/eden-cli"
+          app=build/release/bin/TuttiFrutti.app
+          test -x "$app/Contents/MacOS/TuttiFrutti"
+          test -x build/release/bin/TuttiFrutti-cli
+          cp build/release/bin/TuttiFrutti-cli "$app/Contents/MacOS/TuttiFrutti-cli"
           "$(brew --prefix qt@6)/bin/macdeployqt" "$app" \
-            -executable="$app/Contents/MacOS/eden-cli" -libpath="$(brew --prefix)/lib" \
+            -executable="$app/Contents/MacOS/TuttiFrutti-cli" -libpath="$(brew --prefix)/lib" \
             -always-overwrite -verbose=1
           # Qt's virtual keyboard input plugin pulls in the QML stack, which the emulator doesn't use.
           rm -f "$app/Contents/PlugIns/platforminputcontexts/libqtvirtualkeyboardplugin.dylib"
@@ -579,7 +579,7 @@ jobs:
               done
           done
           # Libraries that load their dependencies through @rpath find them in the bundle.
-          for program in lichii eden-cli; do
+          for program in TuttiFrutti TuttiFrutti-cli; do
             install_name_tool -add_rpath @executable_path/../Frameworks \
               "$app/Contents/MacOS/$program" 2> /dev/null
           done
@@ -607,19 +607,19 @@ jobs:
           codesign --force --deep --sign - "$app"
           if [ -f dist/eglantine.entitlements ]; then
             codesign --force --sign - --entitlements dist/eglantine.entitlements \
-              "$app/Contents/MacOS/eden-cli"
+              "$app/Contents/MacOS/TuttiFrutti-cli"
             codesign --force --sign - --entitlements dist/eglantine.entitlements "$app"
           fi
           codesign --verify --deep --strict "$app"
-          ditto -c -k --keepParent "$app" "lichii-${GITHUB_SHA}-${{ matrix.platform }}.zip"
-          ls -la "lichii-${GITHUB_SHA}-${{ matrix.platform }}.zip"
-          # Also ship a .dmg (drag lichii.app onto Applications).
+          ditto -c -k --keepParent "$app" "TuttiFrutti-${GITHUB_SHA}-${{ matrix.platform }}.zip"
+          ls -la "TuttiFrutti-${GITHUB_SHA}-${{ matrix.platform }}.zip"
+          # Also ship a .dmg (drag TuttiFrutti.app onto Applications).
           dmgdir=$(mktemp -d)
-          ditto "$app" "$dmgdir/lichii.app"
+          ditto "$app" "$dmgdir/TuttiFrutti.app"
           ln -s /Applications "$dmgdir/Applications"
-          hdiutil create -volname "Lichii" -srcfolder "$dmgdir" -ov -format UDZO \
-            "lichii-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
-          ls -la "lichii-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
+          hdiutil create -volname "TuttiFrutti" -srcfolder "$dmgdir" -ov -format UDZO \
+            "TuttiFrutti-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
+          ls -la "TuttiFrutti-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
 
       # The artifact is the bin folder itself: GitHub zips artifacts on download, and uploading a
       # zip gave a zip inside a zip. The release job zips it once for the release.
@@ -627,7 +627,7 @@ jobs:
         if: startsWith(matrix.platform, 'windows')
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-${{ matrix.platform }}${{ inputs.nsight_aftermath && '-aftermath' || '' }}-${{ github.sha }}
+          name: TuttiFrutti-${{ matrix.platform }}${{ inputs.nsight_aftermath && '-aftermath' || '' }}-${{ github.sha }}
           path: build/release/bin/
           if-no-files-found: error
           retention-days: 7
@@ -646,10 +646,10 @@ jobs:
         if: startsWith(matrix.platform, 'linux')
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-${{ matrix.platform }}-${{ github.sha }}
+          name: TuttiFrutti-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            lichii-${{ github.sha }}-${{ matrix.platform }}.tar.gz
-            lichii-${{ github.sha }}-${{ matrix.platform }}.AppImage
+            TuttiFrutti-${{ github.sha }}-${{ matrix.platform }}.tar.gz
+            TuttiFrutti-${{ github.sha }}-${{ matrix.platform }}.AppImage
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -659,10 +659,10 @@ jobs:
         if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-${{ matrix.platform }}-${{ github.sha }}
+          name: TuttiFrutti-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            lichii-${{ github.sha }}-${{ matrix.platform }}.zip
-            lichii-${{ github.sha }}-${{ matrix.platform }}.dmg
+            TuttiFrutti-${{ github.sha }}-${{ matrix.platform }}.zip
+            TuttiFrutti-${{ github.sha }}-${{ matrix.platform }}.dmg
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -681,7 +681,7 @@ jobs:
       - name: Download binaries
         uses: actions/download-artifact@v7
         with:
-          pattern: lichii-*-${{ github.sha }}
+          pattern: TuttiFrutti-*-${{ github.sha }}
           path: artifacts
 
       - name: Package release files
@@ -731,12 +731,12 @@ jobs:
 
           | Platform | Download |
           | --- | --- |
-          | Windows x64 | [lichii-windows-x86_64-pgo.zip](${base}/lichii-windows-x86_64-pgo.zip) |
-          | Linux x64 (AppImage) | [lichii-linux-x86_64-pgo.AppImage](${base}/lichii-linux-x86_64-pgo.AppImage) |
+          | Windows x64 | [TuttiFrutti-windows-x86_64-pgo.zip](${base}/TuttiFrutti-windows-x86_64-pgo.zip) |
+          | Linux x64 (AppImage) | [TuttiFrutti-linux-x86_64-pgo.AppImage](${base}/TuttiFrutti-linux-x86_64-pgo.AppImage) |
 
           ### Windows
 
-          Extract the whole zip and run \`lichii.exe\`. The zip ships a \`user\` folder beside it:
+          Extract the whole zip and run \`TuttiFrutti.exe\`. The zip ships a \`user\` folder beside it:
           with that folder present the emulator keeps its config, saves, NAND and cache there
           (portable), and the first start offers to import your previous profile. Delete or rename
           \`user\` to use the normal \`%APPDATA%\lichii\` profile instead.

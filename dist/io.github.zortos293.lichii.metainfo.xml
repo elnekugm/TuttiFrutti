@@ -8,7 +8,7 @@
     <p>TuttiFrutti is an experimental open-source emulator for the Nintendo Switch and Switch 2, built on Eglantine, Eden, yuzu and Sudachi. Compatibility and performance vary by game and hardware.</p>
   </description>
   <launchable type="desktop-id">io.github.zortos293.lichii.desktop</launchable>
-  <provides><binary>lichii</binary></provides>
+  <provides><binary>TuttiFrutti</binary></provides>
   <categories><category>Game</category><category>Emulator</category></categories>
   <url type="homepage">https://github.com/elnekugm/TuttiFrutti</url>
   <url type="bugtracker">https://github.com/elnekugm/TuttiFrutti/issues</url>

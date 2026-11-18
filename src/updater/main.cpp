@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Installs a staged update for Windows. Lichii copies this program to a temporary folder and starts
-// it before closing, because the running lichii.exe and its DLLs cannot be replaced.
+// it before closing, because the running TuttiFrutti.exe and its DLLs cannot be replaced.
 //
-// lichii-updater.exe <process id> <staging folder> <install folder> <program to start>
+// TuttiFrutti-updater.exe <process id> <staging folder> <install folder> <program to start>
 
 #include <cstdlib>
 #include <cwchar>
