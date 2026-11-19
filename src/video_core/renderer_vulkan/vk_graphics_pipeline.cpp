@@ -1333,11 +1333,26 @@ bool GraphicsPipeline::ComputedHandlesChanged() const {
 }
 
 bool GraphicsPipeline::SharesDeltaStateWith(const GraphicsPipeline& other) const noexcept {
-    return delta_blocker == other.delta_blocker && !mesh_emulation && !other.mesh_emulation &&
-           !writes_images && !other.writes_images &&
-           num_image_elements == other.num_image_elements && num_textures == other.num_textures &&
-           configured_stages == other.configured_stages &&
-           ShaderHashes() == other.ShaderHashes();
+    if (delta_blocker != other.delta_blocker || mesh_emulation || other.mesh_emulation ||
+        writes_images || other.writes_images || num_image_elements != other.num_image_elements ||
+        num_textures != other.num_textures || configured_stages != other.configured_stages) {
+        return false;
+    }
+    if ((!delta_computed_handles.empty() || !other.delta_computed_handles.empty()) &&
+        ShaderHashes() != other.ShaderHashes()) {
+        return false;
+    }
+    for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+        const Shader::Info& lhs{stage_infos[stage]};
+        const Shader::Info& rhs{other.stage_infos[stage]};
+        if (lhs.texture_buffer_descriptors.size() != rhs.texture_buffer_descriptors.size() ||
+            lhs.image_buffer_descriptors.size() != rhs.image_buffer_descriptors.size() ||
+            lhs.texture_descriptors.size() != rhs.texture_descriptors.size() ||
+            lhs.image_descriptors.size() != rhs.image_descriptors.size()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void GraphicsPipeline::TakeDeltaStateFrom(GraphicsPipeline& other) noexcept {

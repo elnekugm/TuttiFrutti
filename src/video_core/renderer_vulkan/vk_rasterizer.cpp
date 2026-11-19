@@ -546,6 +546,7 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
     namespace FastDraw = VideoCommon::Nx2FastDraw;
     const ReusableDraw draw = std::exchange(reusable_draw, ReusableDraw{});
     taken_retexture = false;
+    taken_relookup = false;
     taken_revisit = false;
     FastDraw::TakeDelta(taken_delta);
     const FastDraw::Delta& delta = taken_delta;
@@ -559,10 +560,15 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
         return full(FullDraw::NoCandidate);
     }
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
-    if (is_indirect || draw.is_indexed != is_indexed || draw.maxwell3d != maxwell3d ||
-        draw.topology != draw_state.topology || !draw_state.inline_index_draw_indexes.empty() ||
-        frame_dump.Capturing()) {
+    if (is_indirect || draw.maxwell3d != maxwell3d ||
+        !draw_state.inline_index_draw_indexes.empty() || frame_dump.Capturing()) {
         return full(FullDraw::Kind);
+    }
+    if (draw.is_indexed != is_indexed || draw.topology != draw_state.topology) {
+        if (!FastDraw::RelookupDraws()) {
+            return full(FullDraw::Kind);
+        }
+        taken_relookup = true;
     }
     if (draw.serial != FastDraw::Serial()) {
         const u32 last_break = FastDraw::g_last_break.load(std::memory_order_relaxed);
@@ -571,14 +577,24 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
             ++fast_draw_stats.break_methods[method];
         }
         const auto reason = static_cast<FastDraw::Reason>(last_break & 0xff);
+        const auto& regs = maxwell3d->regs;
+        const bool relookup_break =
+            FastDraw::RelookupDraws() &&
+            draw.memory_serial == FastDraw::MemorySerial() &&
+            draw.texture_registers == ReadTextureRegisters(regs) &&
+            regs.transform_feedback_enabled == 0;
         const bool handle_break =
             reason == FastDraw::Reason::ConstantData ||
             reason == FastDraw::Reason::TextureHeaders ||
             reason == FastDraw::Reason::InlineData;
-        if (!handle_break || !draw.pipeline->CanRetexture() || !FastDraw::RetextureDraws()) {
+        if (relookup_break) {
+            taken_relookup = true;
+        } else if (!handle_break || !draw.pipeline->CanRetexture() ||
+                   !FastDraw::RetextureDraws()) {
             return full(FullDraw::StateChanged);
+        } else {
+            taken_retexture = true;
         }
-        taken_retexture = true;
     }
     if (draw.map_serial != gpu_memory->MapSerial()) {
         ++fast_draw_stats.breaks[static_cast<size_t>(FastDraw::Reason::Map)];
@@ -601,7 +617,10 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
         (!draw.pipeline->HasDynamicVertexInput() ||
          FixedPipelineState::DynamicAttributeTypes(maxwell3d->regs) !=
              draw.pipeline->DynamicAttributeTypes())) {
-        return full(FullDraw::VertexInput);
+        if (!FastDraw::RelookupDraws()) {
+            return full(FullDraw::VertexInput);
+        }
+        taken_relookup = true;
     }
     const auto& handles = draw.pipeline->HandleConstantBuffers();
     for (size_t stage = 0; stage < handles.size() && !delta.Empty(); ++stage) {
@@ -638,7 +657,8 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
     return draw.pipeline;
 }
 
-bool RasterizerVulkan::DeltaStillHolds(u64 serial, u64 map_serial) {
+bool RasterizerVulkan::DeltaStillHolds(GraphicsPipeline* pipeline, u64 serial, u64 memory_serial,
+                                       u64 map_serial) {
     const auto full = [&](FullDraw reason) {
         ++fast_draw_stats.full[static_cast<size_t>(reason)];
         return false;
@@ -657,23 +677,27 @@ bool RasterizerVulkan::DeltaStillHolds(u64 serial, u64 map_serial) {
     if (taken_retexture) {
         // The serial break was a texture handle write or bind: read the handles again and resolve
         // only the views that changed.
-        if (!taken_draw.pipeline->RetextureDelta()) {
+        if (!pipeline->RetextureDelta()) {
             return full(FullDraw::HandleData);
         }
         taken_retexture = false;
+    } else if (taken_relookup) {
+        // Register-only or pipeline-only changes: no memory write may have happened since.
+        if (taken_draw.memory_serial != memory_serial) {
+            return full(FullDraw::StateChanged);
+        }
     } else if (taken_draw.serial != serial) {
         return full(FullDraw::StateChanged);
     }
     // A delta draw prepares none of the images it samples: one with an upload pending or a newer
     // alias to copy in (a render target aliasing it, written by the draw before) needs Configure.
-    if (taken_draw.pipeline->DeltaImagesChange()) {
+    if (pipeline->DeltaImagesChange()) {
         return full(FullDraw::SampledImages);
     }
     // Handles computed at draw time come from memory the delta doesn't track (storage buffers).
-    if (taken_draw.pipeline->ComputedHandlesChanged()) {
-        if (!VideoCommon::Nx2FastDraw::RetextureDraws() ||
-            !taken_draw.pipeline->CanRetexture() ||
-            !taken_draw.pipeline->RetextureComputed()) {
+    if (pipeline->ComputedHandlesChanged()) {
+        if (!VideoCommon::Nx2FastDraw::RetextureDraws() || !pipeline->CanRetexture() ||
+            !pipeline->RetextureComputed()) {
             return full(FullDraw::ComputedHandles);
         }
     }
@@ -714,7 +738,8 @@ bool RasterizerVulkan::RevisitDraw(GraphicsPipeline* pipeline, bool is_indirect)
 }
 
 void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_indexed,
-                                        bool is_indirect, u64 serial, u64 map_serial) {
+                                        bool is_indirect, u64 serial, u64 memory_serial,
+                                        u64 map_serial) {
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
     const auto topology = draw_state.topology;
     const auto ineligible = [&]() -> std::optional<Ineligible> {
@@ -742,6 +767,7 @@ void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_inde
         .pipeline = pipeline,
         .maxwell3d = maxwell3d,
         .serial = serial,
+        .memory_serial = memory_serial,
         .map_serial = map_serial,
         .tick = scheduler.CurrentTick(),
         .render_pass = scheduler.RenderPassSerial(),
@@ -1120,6 +1146,18 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     };
     GraphicsPipeline* delta_pipeline =
         fast_draw_on ? TakeReusableDraw(is_indexed, is_indirect) : nullptr;
+    if (delta_pipeline != nullptr && taken_relookup) {
+        GraphicsPipeline* const looked_up = pipeline_cache.CurrentGraphicsPipeline();
+        if (looked_up == delta_pipeline) {
+            // The pipeline did not change.
+        } else if (looked_up != nullptr && looked_up->IsBuilt() &&
+                   looked_up->SharesDeltaStateWith(*delta_pipeline)) {
+            looked_up->TakeDeltaStateFrom(*delta_pipeline);
+            delta_pipeline = looked_up;
+        } else {
+            delta_pipeline = nullptr;
+        }
+    }
     if (delta_pipeline == nullptr && fast_draw_on) {
         GraphicsPipeline* const looked_up = pipeline_cache.CurrentGraphicsPipeline();
         if (looked_up != nullptr && RevisitDraw(looked_up, is_indirect)) {
@@ -1319,6 +1357,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     // What the next draw's TakeReusableDraw compares with, read once the caches are locked: a
     // break from here on, this draw's own resolve included, ends the delta chain.
     const u64 draw_serial = FastDraw::Serial();
+    const u64 draw_memory_serial = FastDraw::MemorySerial();
     const u64 draw_map_serial = gpu_memory->MapSerial();
     // update engine as channel may be different.
     pipeline->SetEngine(maxwell3d, gpu_memory);
@@ -1335,7 +1374,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
     }
     const bool delta_holds =
-        delta_pipeline != nullptr && DeltaStillHolds(draw_serial, draw_map_serial);
+        delta_pipeline != nullptr &&
+        DeltaStillHolds(delta_pipeline, draw_serial, draw_memory_serial, draw_map_serial);
     if (taken_revisit && delta_holds) {
         delta_pipeline->UnbindStageTextureBuffers();
     }
@@ -1485,7 +1525,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
     }
     if (fast_draw_on) {
-        NoteResolvedDraw(pipeline, is_indexed, is_indirect, draw_serial, draw_map_serial);
+        NoteResolvedDraw(pipeline, is_indexed, is_indirect, draw_serial, draw_memory_serial,
+                         draw_map_serial);
     }
     if (time_fast_draw) {
         const size_t index = static_cast<size_t>(path);

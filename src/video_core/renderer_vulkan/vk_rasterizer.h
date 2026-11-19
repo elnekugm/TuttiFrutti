@@ -441,6 +441,7 @@ private:
         GraphicsPipeline* pipeline{};
         const Tegra::Engines::Maxwell3D* maxwell3d{};
         u64 serial{};
+        u64 memory_serial{};
         u64 map_serial{};
         u64 tick{};
         u64 render_pass{};
@@ -511,12 +512,13 @@ private:
                                 bool constant_buffer_data);
     /// Whether the draw TakeReusableDraw took still holds once the caches are locked (serial and
     /// map_serial as read then), and the images it samples need no preparing.
-    bool DeltaStillHolds(u64 serial, u64 map_serial);
+    bool DeltaStillHolds(GraphicsPipeline* pipeline, u64 serial, u64 memory_serial,
+                         u64 map_serial);
     /// Whether `pipeline` can keep what it resolved at its own last recorded draw, reading its
     /// texture handles again. Sets taken_draw, taken_retexture and taken_revisit.
     bool RevisitDraw(GraphicsPipeline* pipeline, bool is_indirect);
     void NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_indexed, bool is_indirect, u64 serial,
-                          u64 map_serial);
+                          u64 memory_serial, u64 map_serial);
     void ReportFastDraws();
 
     /// EDEN_NX2_DRAW_REUSE_PROBE: a configured draw's key (state that rarely changes between
@@ -550,6 +552,8 @@ private:
     /// The draw TakeReusableDraw took can keep its views by re-reading only the handles that
     /// changed (RetextureDelta); DeltaStillHolds resolves them once the caches are locked.
     bool taken_retexture{};
+    /// The draw looked its pipeline up after pipeline-only changes (RelookupDraws).
+    bool taken_relookup{};
     /// The draw keeps what its pipeline resolved at its own last recorded draw (RevisitDraw).
     bool taken_revisit{};
     /// Each pipeline's last recorded draw, direct-mapped by its address.
