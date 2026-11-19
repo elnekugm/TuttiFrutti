@@ -8,7 +8,7 @@ on:
         type: string
         default: build-1.2
       publish_release:
-        description: Publish the four packages as a GitHub release
+        description: Publish the packages as a GitHub release
         type: boolean
         default: true
 
@@ -64,9 +64,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Four clean public builds from fresh runners and empty build directories: Windows and
-          # Linux, each for x86-64-v3 (AVX2) and for AMD Zen 3 (znver3), all Release, built with
-          # the checked-in PGO profile and ThinLTO.
+          # Clean public builds from fresh runners and empty build directories: Windows and Linux,
+          # each for x86-64-v3 (AVX2) and for AMD Zen 3, Zen 4 and Zen 5 (znver3/4/5), all Release,
+          # built with the checked-in PGO profile and ThinLTO.
           - platform: linux-x86_64-pgo
             runner: ubuntu-24.04
             preset: v3
@@ -75,6 +75,14 @@ jobs:
             runner: ubuntu-24.04
             preset: zen3
             profile: eglantine.profdata
+          - platform: linux-x86_64-znver4-pgo
+            runner: ubuntu-24.04
+            preset: zen4
+            profile: eglantine.profdata
+          - platform: linux-x86_64-znver5-pgo
+            runner: ubuntu-24.04
+            preset: zen5
+            profile: eglantine.profdata
           - platform: windows-x86_64-pgo
             runner: windows-2022
             preset: v3
@@ -82,6 +90,14 @@ jobs:
           - platform: windows-x86_64-znver3-pgo
             runner: windows-2022
             preset: zen3
+            profile: lichii-windows.profdata
+          - platform: windows-x86_64-znver4-pgo
+            runner: windows-2022
+            preset: zen4
+            profile: lichii-windows.profdata
+          - platform: windows-x86_64-znver5-pgo
+            runner: windows-2022
+            preset: zen5
             profile: lichii-windows.profdata
 
     steps:
@@ -320,6 +336,8 @@ jobs:
           case "${{ matrix.preset }}" in
             v3) cpu=x86-64-v3 ;;
             zen3) cpu=znver3 ;;
+            zen4) cpu=znver4 ;;
+            zen5) cpu=znver5 ;;
             *) echo "::error::unknown preset ${{ matrix.preset }}"; exit 1 ;;
           esac
           grep -F -- "-march=$cpu" "$ninja" > /dev/null
@@ -549,7 +567,7 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-  # Publishes the four packages only after every variant built and packaged. The release is created
+  # Publishes the packages only after every variant built and packaged. The release is created
   # as a draft, its assets are uploaded and verified, and only then does it become public: a
   # failure leaves no partial public release behind.
   release:
@@ -566,7 +584,7 @@ jobs:
           pattern: TuttiFrutti-*-${{ github.sha }}
           path: artifacts
 
-      - name: Collect and verify the four packages
+      - name: Collect and verify the packages
         shell: bash
         run: |
           set -euo pipefail
@@ -580,8 +598,12 @@ jobs:
           cat > expected.txt <<'EOF'
           TuttiFrutti-linux-x86_64-pgo.AppImage
           TuttiFrutti-linux-x86_64-znver3-pgo.AppImage
+          TuttiFrutti-linux-x86_64-znver4-pgo.AppImage
+          TuttiFrutti-linux-x86_64-znver5-pgo.AppImage
           TuttiFrutti-windows-x86_64-pgo.zip
           TuttiFrutti-windows-x86_64-znver3-pgo.zip
+          TuttiFrutti-windows-x86_64-znver4-pgo.zip
+          TuttiFrutti-windows-x86_64-znver5-pgo.zip
           EOF
           find dist -maxdepth 1 -type f -printf '%f\n' | sort > actual.txt
           diff -u expected.txt actual.txt
@@ -625,7 +647,7 @@ jobs:
             the game starts, with a Skip button; the driver cache is saved before play.
           - Query cache and multi-range buffer work reduce locks, waits and memory growth.
 
-          All four packages are Release builds with profile-guided optimization (PGO use) and
+          All eight packages are Release builds with profile-guided optimization (PGO use) and
           ThinLTO. They contain only the emulator, its runtime libraries and resources, the licence
           and the user README: no tests, benchmarks, PGO instrumentation, debug symbols or build
           intermediates.
@@ -634,11 +656,17 @@ jobs:
           | --- | --- | --- |
           | Windows x64 (x86-64-v3) | AVX2: Intel Haswell+, AMD Ryzen 1000+ | [TuttiFrutti-windows-x86_64-pgo.zip](${base}/TuttiFrutti-windows-x86_64-pgo.zip) |
           | Windows x64 (AMD Zen 3) | znver3: Ryzen 5000+, EPYC 7003+ | [TuttiFrutti-windows-x86_64-znver3-pgo.zip](${base}/TuttiFrutti-windows-x86_64-znver3-pgo.zip) |
+          | Windows x64 (AMD Zen 4) | znver4: Ryzen 7000+, EPYC 9004+ | [TuttiFrutti-windows-x86_64-znver4-pgo.zip](${base}/TuttiFrutti-windows-x86_64-znver4-pgo.zip) |
+          | Windows x64 (AMD Zen 5) | znver5: Ryzen 9000+, EPYC 9005+ | [TuttiFrutti-windows-x86_64-znver5-pgo.zip](${base}/TuttiFrutti-windows-x86_64-znver5-pgo.zip) |
           | Linux x64 (AppImage, x86-64-v3) | AVX2: Intel Haswell+, AMD Ryzen 1000+ | [TuttiFrutti-linux-x86_64-pgo.AppImage](${base}/TuttiFrutti-linux-x86_64-pgo.AppImage) |
           | Linux x64 (AppImage, AMD Zen 3) | znver3: Ryzen 5000+, EPYC 7003+ | [TuttiFrutti-linux-x86_64-znver3-pgo.AppImage](${base}/TuttiFrutti-linux-x86_64-znver3-pgo.AppImage) |
+          | Linux x64 (AppImage, AMD Zen 4) | znver4: Ryzen 7000+, EPYC 9004+ | [TuttiFrutti-linux-x86_64-znver4-pgo.AppImage](${base}/TuttiFrutti-linux-x86_64-znver4-pgo.AppImage) |
+          | Linux x64 (AppImage, AMD Zen 5) | znver5: Ryzen 9000+, EPYC 9005+ | [TuttiFrutti-linux-x86_64-znver5-pgo.AppImage](${base}/TuttiFrutti-linux-x86_64-znver5-pgo.AppImage) |
 
-          Use a znver3 package only on an AMD Zen 3 or newer CPU. Every other x86-64 machine uses the
-          x86-64-v3 package.
+          Use a znver package only on that CPU generation or newer: znver3 needs AMD Zen 3+, znver4
+          needs Zen 4+ (it also runs on Zen 5) and znver5 needs Zen 5+. Every other x86-64 machine
+          uses the x86-64-v3 package. The PGO profile is the same for every variant; the znver builds
+          add that generation's tuning, and the Zen 4 and Zen 5 ones may also use AVX-512.
 
           ### Windows
 
@@ -679,8 +707,8 @@ jobs:
             --clobber
 
           count=$(gh release view "$tag" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets | length')
-          if [ "$count" != 4 ]; then
-            echo "::error::The draft release holds $count assets instead of 4"
+          if [ "$count" != 8 ]; then
+            echo "::error::The draft release holds $count assets instead of 8"
             exit 1
           fi
           asset_names=$(gh release view "$tag" --repo "${GITHUB_REPOSITORY}" --json assets \
@@ -692,7 +720,7 @@ jobs:
           gh release edit "$tag" --repo "${GITHUB_REPOSITORY}" --draft=false
           published=1
           trap - EXIT
-          echo "Published ${tag} with four clean packages."
+          echo "Published ${tag} with $((count)) clean packages."
 
       # LICHII_BUILD_TAG is baked into every binary and the update checker compares release tags
       # against it. A release whose tag or title names another version would be skipped or offered
