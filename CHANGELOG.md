@@ -12,6 +12,8 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   that changed, including handles computed at draw time.
 - A draw of another pipeline can recover that pipeline's own last draw when memory, mappings,
   command buffer, render pass and texture pool registers are unchanged.
+- Draws after pipeline-only changes look their pipeline up and keep the previous pipeline's views,
+  samplers and descriptors when both resolve them alike.
 - Memory-serial fast draws: register-only 3D changes no longer invalidate uniform keeps, and
   inline constant buffer writes that write the same words are skipped.
 - Ocarina of Time no longer re-uploads its 64 KiB native uniform bank every frame (~1.5 FPS).
