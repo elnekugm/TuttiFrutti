@@ -638,14 +638,23 @@ jobs:
           cat > notes.md <<EOF
           TuttiFrutti ${tag}, built automatically from ${GITHUB_SHA}.
 
-          **What's new in 1.2**
-          - Fast draws re-read only the texture handles that changed, including computed ones, and
-            can return to a pipeline's own last draw instead of resolving everything again.
-          - Ocarina of Time no longer re-uploads its native uniform bank every frame, and register
-            changes no longer throw away uniform keeps.
-          - Large shader caches (100,000+ pipelines) can be compiled on the loading screen before
-            the game starts, with a Skip button; the driver cache is saved before play.
-          - Query cache and multi-range buffer work reduce locks, waits and memory growth.
+          **What's new in 1.3**
+          - Cached shaders are compiled on the loading screen before the game starts by default,
+            so shaders you have already run no longer compile at their first draw while playing.
+            The loading screen shows the progress and has a Skip button.
+          - Shaders compile asynchronously by default: a new pipeline costs a brief pop-in instead
+            of a freeze. Switch 2 compute dispatches whose outputs the GPU already wrote are
+            skipped too.
+          - Fast draws keep more state out of the breaks (counter resets, render enable, report
+            operands, MME addresses), and the port's corrupted dialogue text and save thumbnails
+            in Ocarina of Time are fixed.
+          - Shader lowering: IMAD with a negated addend, NVN2 constant banks 25-31, uniform
+            handles for TLD.B.LL and TXQ, register-handle SUATOM/SURED/SULD/SUST,
+            USHF.L.U64.HI, REDUX.AND, LDG.STRONG.GPU, and the output stage buffer read-back
+            (Switch Sports Resort's black water).
+          - The slope depth bias is scaled to guest pixels on rescaled targets.
+          - The Windows profile-guided optimization profile is retrained on 1.3, and this release
+            adds AMD Zen 4 and Zen 5 packages beside x86-64-v3 and Zen 3.
 
           All eight packages are Release builds with profile-guided optimization (PGO use) and
           ThinLTO. They contain only the emulator, its runtime libraries and resources, the licence
@@ -737,4 +746,4 @@ jobs:
           test "$(jq -r '.tagName' <<< "$view")" = "$expected"
           test "$(jq -r '.name' <<< "$view")" = "TuttiFrutti $expected"
           test "$(jq -r '.isDraft' <<< "$view")" = "false"
-          test "$(jq -r '.assets | length' <<< "$view")" = "4"
+          test "$(jq -r '.assets | length' <<< "$view")" = "8"
