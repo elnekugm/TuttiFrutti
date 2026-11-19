@@ -5131,8 +5131,9 @@ void MainWindow::PrepareShaderPrecache(u64 title_id, const std::filesystem::path
     ShaderWarm::RequestWarmBeforeStart(true);
 }
 
-/// A cache this large is worth building before play: the loading screen shows the progress and a
-/// Skip button, and the renderer waits for every cached pipeline before the game starts.
+/// Every cached pipeline is worth building before play: the loading screen shows the progress and
+/// a Skip button, and the renderer waits for all of them before the game starts, so none compiles
+/// at its first draw while playing.
 void MainWindow::PrepareCachedShaderPrecompile(u64 title_id) {
     namespace ShaderWarm = VideoCommon::ShaderWarm;
     ShaderWarm::RequestPrecompileCached(false);
@@ -5143,16 +5144,15 @@ void MainWindow::PrepareCachedShaderPrecompile(u64 title_id) {
     if (mode == Settings::PrecompileCachedShaders::Off) {
         return;
     }
-    constexpr std::size_t threshold = 100000;
     const std::size_t count = CachedPipelineCount(title_id);
-    if (count == 0 ||
-        (mode == Settings::PrecompileCachedShaders::Ask && count < threshold)) {
+    if (count == 0) {
         return;
     }
     if (mode == Settings::PrecompileCachedShaders::Ask) {
         QMessageBox box(QMessageBox::Question, tr("Precompile Shaders"),
                         tr("This game's shader cache holds %1 pipelines. Compile them before "
-                           "the game starts so they don't compile while you play?")
+                           "the game starts so they don't compile while you play?\n\n"
+                           "You can change this in Configure, Graphics, Advanced.")
                             .arg(static_cast<qulonglong>(count)),
                         QMessageBox::NoButton, this);
         QPushButton* const compile =

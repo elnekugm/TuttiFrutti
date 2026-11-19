@@ -38,7 +38,7 @@ void ForEachRecommendedSetting(Values& settings, Func&& func) {
     entry(settings.native_async_draws, NativeAsyncDraws::Bounded);
     entry(settings.native_pipeline_wait_ms, 8);
     entry(settings.precache_shaders, PrecacheShaders::Off);
-    entry(settings.precompile_cached_shaders, PrecompileCachedShaders::Ask);
+    entry(settings.precompile_cached_shaders, PrecompileCachedShaders::Always);
     entry(settings.use_video_framerate, false);
     entry(settings.mkw_30fps, false);
     entry(settings.mkw_60fps, false);

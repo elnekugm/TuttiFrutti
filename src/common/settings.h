@@ -717,10 +717,11 @@ struct Values {
                                                         true,
                                                         true};
 
-    // A game whose cache holds at least 100,000 pipelines can compile them all on the loading
-    // screen instead of during play. Ask: the desktop app offers it at launch; Skip starts at once.
+    // Every pipeline saved by earlier sessions is compiled on the loading screen before the game
+    // starts instead of at its first draw during play. Ask: the desktop app offers it at launch;
+    // Off compiles them during play as before. The loading screen has a Skip button.
     SwitchableSetting<PrecompileCachedShaders> precompile_cached_shaders{
-        linkage, PrecompileCachedShaders::Ask, "precompile_cached_shaders",
+        linkage, PrecompileCachedShaders::Always, "precompile_cached_shaders",
         Category::RendererAdvanced, Specialization::Default, true, true};
 
     // Build every cached graphics pipeline while the game loads, not only those recent sessions

@@ -403,10 +403,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "The first launch reads the game files and takes a few minutes; later launches "
               "only build what is new, until the GPU driver changes. The loading screen has a "
               "Skip button.\nAsk asks at launch while the game has never been precached."));
-    INSERT(Settings, precompile_cached_shaders, tr("Precompile large shader caches:"),
-           tr("When a game's cache holds at least 100,000 pipelines, builds all of them on the "
-              "loading screen before the game starts. The loading screen has a Skip button. Ask "
-              "offers it at launch; Off compiles them during play as before."));
+    INSERT(Settings, precompile_cached_shaders, tr("Precompile cached shaders:"),
+           tr("Builds every shader saved by earlier play sessions on the loading screen before the "
+              "game starts, so they don't compile while you play. The loading screen shows the "
+              "progress and has a Skip button. Ask offers it at launch; Off compiles them during "
+              "play as before."));
     INSERT(Settings, build_all_cached_shaders, tr("Build all cached shaders before game start"),
            tr("Builds every shader saved by earlier play sessions on the loading screen and keeps "
               "them built, so places you visited long ago don't stutter. Without it, only the "
