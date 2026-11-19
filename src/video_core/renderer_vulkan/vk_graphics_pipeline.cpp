@@ -1334,21 +1334,26 @@ bool GraphicsPipeline::ComputedHandlesChanged() const {
 
 bool GraphicsPipeline::SharesDeltaStateWith(const GraphicsPipeline& other) const noexcept {
     if (delta_blocker != other.delta_blocker || mesh_emulation || other.mesh_emulation ||
-        writes_images || other.writes_images || num_image_elements != other.num_image_elements ||
-        num_textures != other.num_textures || configured_stages != other.configured_stages) {
+        writes_images || other.writes_images || uses_push_descriptor != other.uses_push_descriptor ||
+        uses_descriptor_buffer != other.uses_descriptor_buffer ||
+        num_image_elements != other.num_image_elements || num_textures != other.num_textures ||
+        configured_stages != other.configured_stages) {
         return false;
     }
+    // Computed handles are evaluated with the shader's own handle programs.
     if ((!delta_computed_handles.empty() || !other.delta_computed_handles.empty()) &&
         ShaderHashes() != other.ShaderHashes()) {
         return false;
     }
+    // Equal counts are not enough: the descriptors themselves must match, or the kept views and
+    // samplers would be bound for another binding order (the wrong image).
     for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
         const Shader::Info& lhs{stage_infos[stage]};
         const Shader::Info& rhs{other.stage_infos[stage]};
-        if (lhs.texture_buffer_descriptors.size() != rhs.texture_buffer_descriptors.size() ||
-            lhs.image_buffer_descriptors.size() != rhs.image_buffer_descriptors.size() ||
-            lhs.texture_descriptors.size() != rhs.texture_descriptors.size() ||
-            lhs.image_descriptors.size() != rhs.image_descriptors.size()) {
+        if (lhs.texture_buffer_descriptors != rhs.texture_buffer_descriptors ||
+            lhs.image_buffer_descriptors != rhs.image_buffer_descriptors ||
+            lhs.texture_descriptors != rhs.texture_descriptors ||
+            lhs.image_descriptors != rhs.image_descriptors) {
             return false;
         }
     }
@@ -1405,7 +1410,7 @@ bool GraphicsPipeline::ReadRawHandles(std::vector<u32>& out, std::vector<u32>* c
 
 std::optional<u32> GraphicsPipeline::RetextureDelta() {
     if (!CanRetexture() || delta_raw_handles.size() != delta_views.size() ||
-        delta_raw_handles.size() != delta_views.size()) {
+        delta_samplers.size() != delta_views.size()) {
         return std::nullopt;
     }
     retexture_handles.clear();

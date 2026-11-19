@@ -674,6 +674,11 @@ bool RasterizerVulkan::DeltaStillHolds(GraphicsPipeline* pipeline, u64 serial, u
     if (taken_draw.render_pass != scheduler.RenderPassSerial() || !scheduler.IsRenderPassActive()) {
         return full(FullDraw::RenderPass);
     }
+    // RevisitDraw ran before the caches were locked: a write or a cache invalidation since that
+    // draw must still end the chain, or the kept views and uniforms could be stale.
+    if (taken_revisit && taken_draw.memory_serial != memory_serial) {
+        return full(FullDraw::StateChanged);
+    }
     if (taken_retexture) {
         // The serial break was a texture handle write or bind: read the handles again and resolve
         // only the views that changed.
@@ -723,7 +728,8 @@ bool RasterizerVulkan::RevisitDraw(GraphicsPipeline* pipeline, bool is_indirect)
         draw.generation != pipeline->DeltaGeneration()) {
         return false;
     }
-    if (draw.map_serial != gpu_memory->MapSerial() || draw.tick != scheduler.CurrentTick() ||
+    if (draw.memory_serial != FastDraw::MemorySerial() ||
+        draw.map_serial != gpu_memory->MapSerial() || draw.tick != scheduler.CurrentTick() ||
         draw.render_pass != scheduler.RenderPassSerial() || !scheduler.IsRenderPassActive()) {
         return false;
     }
