@@ -192,7 +192,7 @@ public:
             if (spins < 4096) {
                 CopierPause();
             } else {
-                // Park the GPU thread instead of yielding in a loop while the copy finishes.
+// Park the GPU thread instead of yielding in a loop while the copy finishes.
                 // Ported from Lichii nx2 4a3dbf64.
                 completed.wait(done, std::memory_order_acquire);
             }
