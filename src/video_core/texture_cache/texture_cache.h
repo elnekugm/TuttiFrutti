@@ -626,7 +626,7 @@ void TextureCache<P>::TickFrame() {
                     critical_memory = budget - (std::min)(reserved, budget / 2);
                     // The device's budget is not all the room there is: see HostCriticalMemory.
                     // The usage is the driver's, which still counts images waiting to be freed.
-                    const std::optional<u64> commit_room = Common::GetSystemCommitRoom();
+                    const std::optional<u64> commit_room = Common::GetProcessCommitRoom();
                     const u64 host_critical =
                         commit_room
                             ? HostCriticalMemory(runtime.GetDeviceMemoryUsage(), *commit_room)
@@ -744,7 +744,8 @@ void TextureCache<P>::TickFrame() {
                                  slack_margin >> 20, other_memory >> 20, budget >> 20,
                                  retention_limit >> 20, retention_budget >> 20);
                         if (commit_room) {
-                            LOG_INFO(HW_GPU, "Host memory: {} MiB of commit left, {}",
+                            LOG_INFO(HW_GPU,
+                                     "Host memory: {} MiB of commit left for this process, {}",
                                      *commit_room >> 20,
                                      critical_memory == host_critical
                                          ? "which bounds the thresholds"
