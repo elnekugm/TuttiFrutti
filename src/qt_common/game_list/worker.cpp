@@ -643,8 +643,12 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
 void GameListWorker::run() {
     const auto started = std::chrono::steady_clock::now();
     watch_list.clear();
-    loose_dumps.clear();
-    provider->ClearAllEntries();
+loose_dumps.clear();
+    // The scan re-adds every update and add-on from the game folders. Keep the current entries
+    // so a cancelled scan can put them back: a boot cancels the scan that stopping a game
+    // starts (Restart does at once), and the game then loaded without its update.
+    FileSys::ManualContentProvider previous;
+    provider->SwapEntries(previous);
 
     const auto DirEntryReady = [&](GameListDir* game_list_dir) {
         auto pending = std::make_shared<std::unique_ptr<GameListDir>>(game_list_dir);
@@ -697,6 +701,10 @@ void GameListWorker::run() {
         } else {
             AddTitlesToGameList(game_list_dir, parent_type);
         }
+    }
+
+    if (stop_requested) {
+        provider->SwapEntries(previous);
     }
 
     watch_list.removeDuplicates();
