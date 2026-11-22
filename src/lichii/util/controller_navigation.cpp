@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cmath>
+
 #include "common/settings_input.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
@@ -31,8 +33,13 @@ void ControllerNavigation::UnloadController() {
 
 void ControllerNavigation::TriggerButton(Settings::NativeButton::Values native_button,
                                          Qt::Key key) {
-    if (button_values[native_button].value && !button_values[native_button].locked) {
+    if (button_values[native_button].locked) {
+        return;
+    }
+    if (button_values[native_button].value) {
         emit TriggerKeyboardEvent(key);
+    } else {
+        emit TriggerKeyboardRelease(key);
     }
 }
 
@@ -75,6 +82,11 @@ void ControllerNavigation::ControllerUpdateButton() {
         TriggerButton(Settings::NativeButton::DLeft, Qt::Key_Left);
         TriggerButton(Settings::NativeButton::DRight, Qt::Key_Right);
         TriggerButton(Settings::NativeButton::DUp, Qt::Key_Up);
+        // X and + open a game's options, L and R jump through the home screen's games.
+        TriggerButton(Settings::NativeButton::X, Qt::Key_Menu);
+        TriggerButton(Settings::NativeButton::Plus, Qt::Key_Menu);
+        TriggerButton(Settings::NativeButton::L, Qt::Key_PageUp);
+        TriggerButton(Settings::NativeButton::R, Qt::Key_PageDown);
         break;
     case Core::HID::NpadStyleIndex::JoyconLeft:
         TriggerButton(Settings::NativeButton::DDown, Qt::Key_Enter);
@@ -92,8 +104,27 @@ void ControllerNavigation::ControllerUpdateButton() {
 void ControllerNavigation::ControllerUpdateStick() {
     const auto controller_type = player1_controller->GetNpadStyleIndex();
     const auto& player1_sticks = player1_controller->GetSticksValues();
-    const auto& handheld_sticks = player1_controller->GetSticksValues();
+    const auto& handheld_sticks = handheld_controller->GetSticksValues();
     bool update = false;
+
+    // The positions, for a pointer or scrolling: whichever of player 1 and handheld is moved.
+    const auto pick = [&](std::size_t stick, bool y) {
+        const float p1 = y ? player1_sticks[stick].y.value : player1_sticks[stick].x.value;
+        const float hh = y ? handheld_sticks[stick].y.value : handheld_sticks[stick].x.value;
+        return std::abs(p1) >= std::abs(hh) ? p1 : hh;
+    };
+    const std::array<float, 4> positions{
+        pick(Settings::NativeAnalog::LStick, false), pick(Settings::NativeAnalog::LStick, true),
+        pick(Settings::NativeAnalog::RStick, false), pick(Settings::NativeAnalog::RStick, true)};
+    bool moved = false;
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+        moved |= std::abs(positions[i] - stick_positions[i]) > 0.01f ||
+                 (positions[i] == 0.0f) != (stick_positions[i] == 0.0f);
+    }
+    if (moved) {
+        stick_positions = positions;
+        emit SticksMoved(positions[0], positions[1], positions[2], positions[3]);
+    }
 
     for (std::size_t i = 0; i < player1_sticks.size(); ++i) {
         const Common::Input::StickStatus stick{
@@ -114,61 +145,69 @@ void ControllerNavigation::ControllerUpdateStick() {
         return;
     }
 
+    const auto& lstick = stick_values[Settings::NativeAnalog::LStick];
+    const auto& rstick = stick_values[Settings::NativeAnalog::RStick];
+    if (!lstick.left && !lstick.right && !lstick.up && !lstick.down && !rstick.left &&
+        !rstick.right && !rstick.up && !rstick.down) {
+        emit TriggerKeyboardRelease(Qt::Key_unknown);
+        return;
+    }
+
     switch (controller_type) {
     case Core::HID::NpadStyleIndex::Fullkey:
     case Core::HID::NpadStyleIndex::JoyconDual:
     case Core::HID::NpadStyleIndex::Handheld:
     case Core::HID::NpadStyleIndex::GameCube:
         if (stick_values[Settings::NativeAnalog::LStick].down) {
-            emit TriggerKeyboardEvent(Qt::Key_Down);
+            emit TriggerStickDirection(Qt::Key_Down);
             return;
         }
         if (stick_values[Settings::NativeAnalog::LStick].left) {
-            emit TriggerKeyboardEvent(Qt::Key_Left);
+            emit TriggerStickDirection(Qt::Key_Left);
             return;
         }
         if (stick_values[Settings::NativeAnalog::LStick].right) {
-            emit TriggerKeyboardEvent(Qt::Key_Right);
+            emit TriggerStickDirection(Qt::Key_Right);
             return;
         }
         if (stick_values[Settings::NativeAnalog::LStick].up) {
-            emit TriggerKeyboardEvent(Qt::Key_Up);
+            emit TriggerStickDirection(Qt::Key_Up);
             return;
         }
         break;
     case Core::HID::NpadStyleIndex::JoyconLeft:
         if (stick_values[Settings::NativeAnalog::LStick].left) {
-            emit TriggerKeyboardEvent(Qt::Key_Down);
+            emit TriggerStickDirection(Qt::Key_Down);
             return;
         }
         if (stick_values[Settings::NativeAnalog::LStick].up) {
-            emit TriggerKeyboardEvent(Qt::Key_Left);
+            emit TriggerStickDirection(Qt::Key_Left);
             return;
         }
         if (stick_values[Settings::NativeAnalog::LStick].down) {
-            emit TriggerKeyboardEvent(Qt::Key_Right);
+            emit TriggerStickDirection(Qt::Key_Right);
             return;
         }
         if (stick_values[Settings::NativeAnalog::LStick].right) {
-            emit TriggerKeyboardEvent(Qt::Key_Up);
+            emit TriggerStickDirection(Qt::Key_Up);
             return;
         }
         break;
     case Core::HID::NpadStyleIndex::JoyconRight:
         if (stick_values[Settings::NativeAnalog::RStick].right) {
-            emit TriggerKeyboardEvent(Qt::Key_Down);
+            emit TriggerStickDirection(Qt::Key_Down);
             return;
         }
         if (stick_values[Settings::NativeAnalog::RStick].down) {
-            emit TriggerKeyboardEvent(Qt::Key_Left);
+            emit TriggerStickDirection(Qt::Key_Left);
             return;
         }
         if (stick_values[Settings::NativeAnalog::RStick].up) {
-            emit TriggerKeyboardEvent(Qt::Key_Right);
+            emit TriggerStickDirection(Qt::Key_Right);
             return;
         }
         if (stick_values[Settings::NativeAnalog::RStick].left) {
-            emit TriggerKeyboardEvent(Qt::Key_Up);
+            emit TriggerStickDirection(Qt::Key_Up);
             return;
         }
         break;

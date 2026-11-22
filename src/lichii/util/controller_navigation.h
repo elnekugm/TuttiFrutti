@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <array>
+
 #include <QKeyEvent>
 #include <QObject>
 
@@ -28,6 +30,13 @@ public:
 
 signals:
     void TriggerKeyboardEvent(Qt::Key key);
+    /// A button or direction that sent TriggerKeyboardEvent was let go. Qt::Key_unknown: the
+    /// stick went back to the centre (every direction is released).
+    void TriggerKeyboardRelease(Qt::Key key);
+    /// A stick pushed in a direction, as an arrow key (the d-pad sends TriggerKeyboardEvent).
+    void TriggerStickDirection(Qt::Key key);
+    /// Both sticks' positions, -1..1, y up; sent when one changes.
+    void SticksMoved(float left_x, float left_y, float right_x, float right_y);
 
 private:
     void TriggerButton(Settings::NativeButton::Values native_button, Qt::Key key);
@@ -39,6 +48,7 @@ private:
 
     Core::HID::ButtonValues button_values{};
     Core::HID::SticksValues stick_values{};
+    std::array<float, 4> stick_positions{};
 
     int player1_callback_key{};
     int handheld_callback_key{};
