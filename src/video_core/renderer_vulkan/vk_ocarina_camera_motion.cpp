@@ -33,6 +33,7 @@
 #include "video_core/renderer_vulkan/vk_ocarina_camera_motion.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
+#include "video_core/upscaler_status.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 
@@ -1048,6 +1049,7 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
         });
         if (used_fsr4) {
             state.last_evaluation = now;
+            VideoCommon::ReportTemporalUpscaler(VideoCommon::TemporalUpscaler::Fsr4);
             static const bool trace = std::getenv("EDEN_NX2_DLSS_CONTRACT_TRACE") != nullptr;
             if (trace || frame % 120 == 0 || reset) {
                 LOG_INFO(Render_Vulkan,
@@ -1084,6 +1086,7 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
             .vertical_fov = 2.0f * std::atan(1.0f / projection_y),
         });
         state.last_evaluation = now;
+        VideoCommon::ReportTemporalUpscaler(VideoCommon::TemporalUpscaler::Fsr31);
         static const bool trace = std::getenv("EDEN_NX2_DLSS_CONTRACT_TRACE") != nullptr;
         if (trace || frame % 120 == 0 || fsr_reset) {
             LOG_INFO(Render_Vulkan,

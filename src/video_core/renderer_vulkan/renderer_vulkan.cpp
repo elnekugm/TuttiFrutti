@@ -34,6 +34,7 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_state_tracker.h"
+#include "video_core/upscaler_status.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/textures/decoders.h"
 #include "video_core/vulkan_common/vk_enum_string_helper.h"
@@ -272,6 +273,7 @@ try
 }
 
 RendererVulkan::~RendererVulkan() {
+    VideoCommon::ReportTemporalUpscaler(VideoCommon::TemporalUpscaler::None);
     scheduler.RegisterOnSubmit([] {});
     void(device.GetLogical().WaitIdle());
 }
@@ -581,5 +583,11 @@ VideoCore::DlssStatus RendererVulkan::GetDlssStatus() const {
     return StreamlineDlssUpscaler::Status();
 }
 #endif
+
+std::optional<VideoCore::RendererBase::VramUsage> RendererVulkan::GetVramUsage() const {
+    // The driver and VMA view of this process device-local memory, against the card.
+    return VramUsage{device.GetDeviceMemoryUsage(), device.GetDeviceLocalHeapSize()};
+}
+
 
 } // namespace Vulkan

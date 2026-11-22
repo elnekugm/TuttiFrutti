@@ -49,6 +49,7 @@
 #include "video_core/texture_cache/samples_helper.h"
 #include "video_core/texture_cache/util.h"
 #include "video_core/dlss_contract.h"
+#include "video_core/upscaler_status.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #ifdef EGLANTINE_STREAMLINE
 #include "video_core/vulkan_common/streamline.h"
@@ -2173,6 +2174,7 @@ bool TextureCacheRuntime::UpscaleWithFsr3(Framebuffer* dst_framebuffer, ImageVie
     }
     DrawUpscaledOutput(dst_framebuffer, fsr3_upscaler->OutputView(), fsr3_upscaler->OutputImage(),
                        fsr3_upscaler->PointSampler());
+    VideoCommon::ReportTemporalUpscaler(VideoCommon::TemporalUpscaler::Fsr31);
     static bool logged{};
     if (!logged) {
         logged = true;
@@ -2296,6 +2298,7 @@ bool TextureCacheRuntime::UpscaleWithDlss(Framebuffer* dst_framebuffer, ImageVie
     DrawUpscaledOutput(dst_framebuffer, dlss_upscaler->OutputView(), dlss_upscaler->OutputImage(),
                        native_resolution ? dlss_upscaler->LinearSampler()
                                          : dlss_upscaler->PointSampler());
+    VideoCommon::ReportTemporalUpscaler(VideoCommon::TemporalUpscaler::Dlss);
     static bool logged{};
     if (!logged) {
         logged = true;

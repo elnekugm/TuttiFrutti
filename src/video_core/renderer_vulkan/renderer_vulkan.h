@@ -44,6 +44,8 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
 
 class RendererVulkan final : public VideoCore::RendererBase {
 public:
+    [[nodiscard]] std::optional<VramUsage> GetVramUsage() const override;
+
     explicit RendererVulkan(Core::Frontend::EmuWindow& emu_window,
                             Tegra::MaxwellDeviceMemoryManager& device_memory_, Tegra::GPU& gpu_,
                             std::unique_ptr<Core::Frontend::GraphicsContext> context_);

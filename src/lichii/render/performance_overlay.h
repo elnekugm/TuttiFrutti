@@ -52,6 +52,9 @@ private:
     std::optional<Common::DkbCpuTrace::Snapshot> m_cpuSnapshot;
     std::vector<Core::FrameTimeHistory::Entry> m_frames;
     QString m_tags;
+    /// Process RAM and GPU VRAM in bytes, used and total.
+    std::optional<std::pair<u64, u64>> m_ram;
+    std::optional<std::pair<u64, u64>> m_vram;
 
 signals:
     void closed();

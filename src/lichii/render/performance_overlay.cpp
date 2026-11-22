@@ -15,20 +15,22 @@
 #include <QStringList>
 #include <QWindow>
 
+#include "common/memory_detect.h"
 #include "common/settings.h"
 #include "core/core.h"
 #include "main_window.h"
 #include "qt_common/qt_common.h"
 #include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
+#include "video_core/upscaler_status.h"
 
 namespace {
 
 using Common::DkbCpuTrace::Role;
 
-// Layout of the "6 · 3 + big number" design at 100% scale; Qt scales it with the DPI.
+// Layout of the "6 Â· 3 + big number" design at 100% scale; Qt scales it with the DPI.
 constexpr int OverlayWidth = 300;
-constexpr int OverlayHeight = 158;
+constexpr int OverlayHeight = 176;
 constexpr qreal PaddingX = 10;
 constexpr qreal PaddingTop = 6;
 constexpr qreal ContentWidth = 280;
@@ -40,6 +42,7 @@ constexpr qreal AxisX = 240;
 constexpr qreal LabelX = 247;
 constexpr qreal LabelHeight = 14;
 constexpr qreal FooterTop = GraphTop + GraphHeight + 10;
+constexpr qreal MemoryTop = FooterTop + LabelHeight + 4;
 
 constexpr auto HistoryWindow = std::chrono::seconds{5};
 constexpr auto StatsWindow = std::chrono::milliseconds{500};
@@ -107,7 +110,7 @@ void DrawRuns(QPainter& painter, qreal x, qreal baseline, const std::vector<Run>
 
 QString Percent(const std::optional<double>& percent) {
     return percent ? QStringLiteral("%1%").arg(std::round(*percent), 0, 'f', 0)
-                   : QStringLiteral("—");
+                   : QStringLiteral("â€”");
 }
 
 } // namespace
@@ -183,6 +186,16 @@ void PerformanceOverlay::updateStats(const Core::PerfStatsResults& results,
     m_cpuSnapshot = cpu_snapshot;
 
     auto& renderer = system.GPU().Renderer();
+
+    m_ram.reset();
+    if (const u64 used = Common::GetProcessMemoryUsage().working_set; used != 0) {
+        m_ram = std::make_pair(used, Common::GetHostRam().bytes);
+    }
+    m_vram.reset();
+    if (const auto vram = renderer.GetVramUsage(); vram && vram->total != 0) {
+        m_vram = std::make_pair(vram->used, vram->total);
+    }
+
     renderer.RequestGpuBusySample();
     const auto gpu_ms = renderer.GetGpuBusyMs();
     m_gpuPercent.reset();
@@ -194,12 +207,23 @@ void PerformanceOverlay::updateStats(const Core::PerfStatsResults& results,
     if (const QString& dlss = m_mainWindow->DlssStatusText(); !dlss.isEmpty()) {
         tags << dlss;
     }
+    // The temporal upscaler that actually ran (DLSS shows above), then the window filter.
+    switch (VideoCommon::ActiveTemporalUpscaler()) {
+    case VideoCommon::TemporalUpscaler::Fsr4:
+        tags << QStringLiteral("FSR 4");
+        break;
+    case VideoCommon::TemporalUpscaler::Fsr31:
+        tags << QStringLiteral("FSR 3.1");
+        break;
+    default:
+        break;
+    }
     switch (Settings::values.scaling_filter.GetValue()) {
     case Settings::ScalingFilter::Fsr:
-        tags << QStringLiteral("FSR");
+        tags << QStringLiteral("FSR 1 filter");
         break;
     case Settings::ScalingFilter::Fsr3:
-        tags << QStringLiteral("FSR 3");
+        tags << QStringLiteral("FSR 3 filter");
         break;
     case Settings::ScalingFilter::Sgsr:
     case Settings::ScalingFilter::SgsrEdge:
@@ -209,7 +233,7 @@ void PerformanceOverlay::updateStats(const Core::PerfStatsResults& results,
         break;
     }
     if (const auto& scaling = Settings::values.resolution_info; scaling.active) {
-        tags << QStringLiteral("%1×").arg(scaling.up_factor, 0, 'g', 3);
+        tags << QStringLiteral("%1Ã—").arg(scaling.up_factor, 0, 'g', 3);
     }
     if (const double generated = m_mainWindow->FrameGenFps(); generated >= 0.5) {
         tags << tr("FG +%1").arg(std::round(generated), 0, 'f', 0);
@@ -239,7 +263,7 @@ void PerformanceOverlay::paintEvent(QPaintEvent* event) {
     // Header: the big fps number on the left, frame time and CPU/GPU % on the right.
     const qreal fps_baseline = Baseline(fps_font, PaddingTop, HeaderHeight);
     const std::vector<Run> fps_runs{
-        {m_fps ? QString::number(std::round(*m_fps), 'f', 0) : QStringLiteral("—"), fps_font, text},
+        {m_fps ? QString::number(std::round(*m_fps), 'f', 0) : QStringLiteral("â€”"), fps_font, text},
     };
     DrawRuns(painter, PaddingX, fps_baseline, fps_runs);
     DrawRuns(painter, PaddingX + Width(fps_runs) + 6, fps_baseline,
@@ -248,7 +272,7 @@ void PerformanceOverlay::paintEvent(QPaintEvent* event) {
     const qreal right = PaddingX + ContentWidth;
     const qreal right_top = PaddingTop + (HeaderHeight - 34) / 2;
     const std::vector<Run> ms_runs{
-        {m_frameMs ? QString::number(*m_frameMs, 'f', 1) : QStringLiteral("—"), small_bold_font,
+        {m_frameMs ? QString::number(*m_frameMs, 'f', 1) : QStringLiteral("â€”"), small_bold_font,
          text},
         {QStringLiteral(" ms"), small_font, muted},
     };
@@ -271,7 +295,7 @@ void PerformanceOverlay::paintEvent(QPaintEvent* event) {
     paintGraph(painter, QRectF{PaddingX, GraphTop, ContentWidth, GraphHeight});
 
     // Footer: fps min/median/max over the last 5 s, and the features that are on.
-    QString fps_range = QStringLiteral("— — —");
+    QString fps_range = QStringLiteral("â€” â€” â€”");
     const std::vector<float> fps_samples(m_fpsSamples.begin(), m_fpsSamples.end());
     if (const auto summary = Core::Summarize(fps_samples)) {
         fps_range = QStringLiteral("%1 %2 %3")
@@ -291,6 +315,33 @@ void PerformanceOverlay::paintEvent(QPaintEvent* event) {
         QFontMetricsF{footer_font}.elidedText(m_tags, Qt::ElideRight, tags_width);
     DrawRuns(painter, right - QFontMetricsF{footer_font}.horizontalAdvance(tags), footer_baseline,
              {{tags, footer_font, muted}});
+
+    // Memory: the process's RAM and the GPU's VRAM, used / total; over 90% turns red.
+    const auto memory_runs = [&](const QString& label,
+                                 const std::optional<std::pair<u64, u64>>& value) {
+        constexpr double GiB = 1024.0 * 1024.0 * 1024.0;
+        if (!value) {
+            return std::vector<Run>{{label + QStringLiteral(" -"), footer_font, muted}};
+        }
+        const double used = static_cast<double>(value->first) / GiB;
+        const double total = static_cast<double>(value->second) / GiB;
+        const bool high = total > 0 && used / total > 0.9;
+        std::vector<Run> runs{
+            {label + QLatin1Char{' '}, footer_font, QColor::fromRgb(DimColor)},
+            {QString::number(used, 'f', 1), footer_font,
+             high ? QColor::fromRgb(SpikeColor) : text},
+        };
+        if (total > 0) {
+            runs.push_back({QStringLiteral("/%1 GB").arg(total, 0, 'f', 1), footer_font, muted});
+        } else {
+            runs.push_back({QStringLiteral(" GB"), footer_font, muted});
+        }
+        return runs;
+    };
+    const qreal memory_baseline = Baseline(footer_font, MemoryTop, LabelHeight);
+    DrawRuns(painter, PaddingX, memory_baseline, memory_runs(QStringLiteral("RAM"), m_ram));
+    const auto vram_runs = memory_runs(QStringLiteral("VRAM"), m_vram);
+    DrawRuns(painter, right - Width(vram_runs), memory_baseline, vram_runs);
 }
 
 void PerformanceOverlay::paintGraph(QPainter& painter, const QRectF& area) {

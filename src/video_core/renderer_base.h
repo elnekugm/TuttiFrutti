@@ -102,6 +102,16 @@ public:
         return {};
     }
 
+    /// Video memory in bytes: what the emulator uses and what the card has. None without a value
+    /// (a renderer that cannot tell).
+    struct VramUsage {
+        u64 used{};
+        u64 total{};
+    };
+    [[nodiscard]] virtual std::optional<VramUsage> GetVramUsage() const {
+        return std::nullopt;
+    }
+
     /// Asks for one host GPU time sample of an upcoming frame
     virtual void RequestGpuBusySample() {}
 
