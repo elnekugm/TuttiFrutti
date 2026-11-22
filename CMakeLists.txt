@@ -495,7 +495,19 @@ endif()
 set(zstd_FORCE_BUNDLED ON)
 AddJsonPackage(zstd)
 
-if (zstd_ADDED)
+if (zstd_ADDED AND NOT TARGET libzstd_static AND DEFINED zstd_SOURCE_DIR)
+    # zstd's CMakeLists lives in build/cmake (its source_subdir), so it is only added when the
+    # add_subdirectory for that path happens. On CMake 4.5 the CPM/FetchContent path does not add
+    # it: libzstd_static is never created and the ALIAS below fails with "target does not already
+    # exist". Add the subdirectory ourselves when the target is missing, which is a no-op wherever
+    # CPM already adds it.
+    set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${zstd_SOURCE_DIR}/build/cmake" "${CMAKE_BINARY_DIR}/_deps/zstd-cmake"
+                     EXCLUDE_FROM_ALL)
+endif()
+
+if (zstd_ADDED AND TARGET libzstd_static)
     add_library(zstd::zstd ALIAS libzstd_static)
     add_library(zstd::libzstd ALIAS libzstd_static)
 endif()
