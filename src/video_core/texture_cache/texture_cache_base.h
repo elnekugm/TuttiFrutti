@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 // TODO: find out which don't require stable iters
@@ -542,6 +543,11 @@ private:
 
     void RefreshContents(Image& image, ImageId image_id);
 
+    /// Host RAM ran out for an upload or write-back copy (issue #8): count it, log at most every
+    /// 10 s, and hold uploads until the collector ran or 60 frames passed.
+    void NoteHostOutOfMemory(std::string_view what, const ImageBase& image);
+    [[nodiscard]] bool HoldUploadsForHostMemory() const noexcept;
+
     /// Upload data from guest to an image
     template <typename StagingBuffer>
     void UploadImageContents(Image& image, StagingBuffer& staging_buffer);
@@ -806,6 +812,13 @@ private:
 
     Common::ScratchBuffer<u8> swizzle_data_buffer;
     Common::ScratchBuffer<u8> unswizzle_data_buffer;
+    /// Host RAM failures (NoteHostOutOfMemory): count, frame of the last one and of the last
+    /// collector run, and when the count was last logged.
+    u64 host_oom_count{};
+    u64 host_oom_logged{};
+    u64 host_oom_frame{};
+    u64 gc_frame{};
+    std::chrono::steady_clock::time_point host_oom_log_time{};
     /// What the last CPU upload spent reading guest memory and untiling it, for EDEN_NX2_TC_TRACE.
     struct {
         double read_ms{};
