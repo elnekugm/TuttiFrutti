@@ -116,9 +116,9 @@ TEST_CASE("TuttiFrutti finds the CPU-target asset", "[updater]") {
     REQUIRE(windows_assets.size() == 1);
     CHECK(windows_assets[0].filename == "TuttiFrutti-windows-x86_64-znver3-pgo.zip");
 
-    const auto linux =
+    const auto linux_release =
         MakeRelease("build-1.1", "TuttiFrutti-linux-x86_64-znver3-pgo.AppImage");
-    const auto linux_assets = linux.GetPlatformAssets("linux-x86_64-znver3-pgo");
+    const auto linux_assets = linux_release.GetPlatformAssets("linux-x86_64-znver3-pgo");
     REQUIRE(linux_assets.size() == 1);
     CHECK(linux_assets[0].filename == "TuttiFrutti-linux-x86_64-znver3-pgo.AppImage");
 
