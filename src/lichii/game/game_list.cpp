@@ -62,6 +62,7 @@
 #include "lichii/game/search_field.h"
 #include "lichii/main_window.h"
 #include "lichii/shader_warm_dialog.h"
+#include "lichii/util/controller_dialog_navigator.h"
 #include "lichii/util/controller_navigation.h"
 #include "lichii/util/cover_art.h"
 #include "lichii/util/icon_search.h"
@@ -111,8 +112,19 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
     controller_repeat = new QTimer(this);
     connect(controller_repeat, &QTimer::timeout, this, [this] {
         controller_repeat->setInterval(110);
-        PostControllerKey(controller_repeat_key, true);
+        PostControllerKey(controller_repeat_key, true, controller_repeat_from_stick);
     });
+    dialog_navigator = new ControllerDialogNavigator(this);
+    connect(controller_navigation, &ControllerNavigation::TriggerStickDirection, this,
+            [this](Qt::Key key) { PostControllerKey(key, false, true); });
+    connect(controller_navigation, &ControllerNavigation::SticksMoved, this,
+            [this](float lx, float ly, float rx, float ry) {
+                if (system.IsPoweredOn()) {
+                    dialog_navigator->Suspend();
+                    return;
+                }
+                dialog_navigator->SetSticks(lx, ly, rx, ry);
+            });
     connect(controller_navigation, &ControllerNavigation::TriggerKeyboardEvent, this,
             [this](Qt::Key key) { PostControllerKey(key, false); });
     connect(controller_navigation, &ControllerNavigation::TriggerKeyboardRelease, this,
@@ -138,14 +150,50 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
     ResetViewMode();
 }
 
-void GameList::PostControllerKey(Qt::Key key, bool repeat) {
+void GameList::PostControllerKey(Qt::Key key, bool repeat, bool from_stick) {
     if (system.IsPoweredOn()) {
         controller_repeat->stop();
         return;
     }
-    // An open menu (a game's options, a menu from the home view) takes the keys first, so it can
-    // be used with the controller too.
+    const auto start_repeat = [&] {
+        if (repeat) {
+            return;
+        }
+        const bool direction = key == Qt::Key_Left || key == Qt::Key_Right ||
+                               key == Qt::Key_Up || key == Qt::Key_Down;
+        if (direction) {
+            controller_repeat_key = key;
+            controller_repeat_from_stick = from_stick;
+            controller_repeat->start(380);
+        } else {
+            controller_repeat->stop();
+        }
+    };
+    // An open menu (a game's options, a menu from the home view, a drop-down in the settings)
+    // takes the keys first, so it can be used with the controller too, stick included.
     QWidget* target = QApplication::activePopupWidget();
+    if (target != nullptr) {
+        if (QWidget* focus = target->focusWidget()) {
+            target = focus;
+        }
+        QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
+        start_repeat();
+        return;
+    }
+    if (QWidget* modal = QApplication::activeModalWidget()) {
+        if (modal->property("controllerNavigation").toBool()) {
+            // A window made for the controller (the update prompt), at its focused button.
+            QWidget* focus = modal->focusWidget() != nullptr ? modal->focusWidget() : modal;
+            QCoreApplication::postEvent(focus,
+                                        new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
+            start_repeat();
+        } else if (!from_stick) {
+            // Settings and other windows: the d-pad and buttons; the stick moves a cursor there.
+            dialog_navigator->HandleKey(modal, key);
+            start_repeat();
+        }
+        return;
+    }
     if (target == nullptr) {
         if (!this->isActiveWindow() || !this->isVisible()) {
             controller_repeat->stop();
@@ -154,17 +202,7 @@ void GameList::PostControllerKey(Qt::Key key, bool repeat) {
         target = m_currentView;
     }
     QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
-
-    if (!repeat) {
-        const bool direction = key == Qt::Key_Left || key == Qt::Key_Right ||
-                               key == Qt::Key_Up || key == Qt::Key_Down;
-        if (direction) {
-            controller_repeat_key = key;
-            controller_repeat->start(380);
-        } else {
-            controller_repeat->stop();
-        }
-    }
+    start_repeat();
 }
 
 void GameList::SetHomeMenuBar(QMenuBar* menu_bar) {

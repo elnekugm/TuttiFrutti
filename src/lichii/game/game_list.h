@@ -38,6 +38,7 @@ class GameTree;
 class GameGrid;
 class GameListSearchField;
 class ControllerNavigation;
+class ControllerDialogNavigator;
 class GameListWorker;
 class GameListDir;
 class MainWindow;
@@ -213,8 +214,11 @@ private:
     /// Repeats a held d-pad or stick direction, as a held arrow key does.
     QTimer* controller_repeat = nullptr;
     Qt::Key controller_repeat_key = Qt::Key_unknown;
+    bool controller_repeat_from_stick = false;
+    /// Settings and other modal windows, driven by the controller.
+    ControllerDialogNavigator* dialog_navigator = nullptr;
     int home_wheel_delta = 0;
-    void PostControllerKey(Qt::Key key, bool repeat);
+    void PostControllerKey(Qt::Key key, bool repeat, bool from_stick = false);
 
     QVariantAnimation* vertical_scroll = nullptr;
     QVariantAnimation* horizontal_scroll = nullptr;

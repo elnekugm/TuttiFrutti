@@ -215,6 +215,8 @@ add_executable(lichii
     set_play_time_dialog.h
     util/clickable_label.cpp
     util/clickable_label.h
+    util/controller_dialog_navigator.cpp
+    util/controller_dialog_navigator.h
     util/controller_navigation.cpp
     util/controller_navigation.h
     util/limitable_input_dialog.cpp
