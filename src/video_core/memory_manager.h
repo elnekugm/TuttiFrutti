@@ -191,6 +191,16 @@ public:
         return map_serial.load(std::memory_order_acquire);
     }
 
+    /// A cached binding is safe to reuse only between completed page-table updates. No value
+    /// while one is in progress, or while one finished after this call started looking.
+    [[nodiscard]] std::optional<u64> StableMappingGeneration() const noexcept {
+        const u64 completed = mapping_updates_completed.load(std::memory_order_acquire);
+        if (mapping_updates_started.load(std::memory_order_acquire) != completed) {
+            return std::nullopt;
+        }
+        return completed;
+    }
+
     /// Changes whenever this address space or the device memory behind it is mapped or unmapped:
     /// a host pointer GetPointer returned is only good while it stays the same.
     [[nodiscard]] u64 HostPointerSerial() const {
@@ -311,6 +321,8 @@ private:
 
     GPUVAddr PageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr dev_addr, size_t size, PTEKind kind, EntryType entry_type);
     GPUVAddr BigPageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr dev_addr, size_t size, PTEKind kind, EntryType entry_type);
+    /// Marks a page-table update in flight; the returned guard marks it completed.
+    [[nodiscard]] auto TrackMappingUpdate();
 
     inline EntryType GetEntry(size_t position, bool is_big_page) const;
     inline void SetEntry(size_t position, EntryType entry, bool is_big_page);
@@ -329,6 +341,9 @@ private:
     mutable std::mutex guard;
     /// Bumped after each page table change; readers keep their MappingSnapshot until then.
     std::atomic<u64> map_serial{};
+    /// Page-table updates in flight and completed, for StableMappingGeneration.
+    std::atomic<u64> mapping_updates_started{};
+    std::atomic<u64> mapping_updates_completed{};
 
     struct ContinuousRun {
         GPUVAddr end;
