@@ -438,6 +438,36 @@ constexpr std::array FPS_UNLOCK_STATES{
     BuiltinPatchState{0x4E9EE00, 0x110},
 };
 
+// The texture data manager tidies its heap (aglTextureDataMgr::Compaction) on its own thread and
+// asks for a new round at every frame no round runs. Every texture a round moves is made again at
+// its new address, which for us is a new image, a new upload and new descriptors: in the market
+// the heap sits at its 5% free line and the rounds never stop. Now a round may start at most once
+// a second (the guest's 19.2 MHz counter); the round itself, what it moves and how, is the game's,
+// and a started round always finishes. Not tied to the frame rate.
+// tbz w8, #1, 0x777288 at main+0x777278 branches to:
+//   tbz w8, #1, skip ; x9 = cntvct ; x8 = x9 - [last] ; x8 < 19.2 M: skip ;
+//   [last] = x9 ; b 0x77727c (ask) ; skip: b 0x777288
+constexpr std::array<u8, 4> TEX_GAP_ORIGINAL{0x88, 0x00, 0x08, 0x36}; // tbz w8, #1, 0x777288
+constexpr std::array<u8, 4> TEX_GAP_HOOK{0xD6, 0x3E, 0xD3, 0x14};     // b 0x3c46dd0
+constexpr std::array<u8, 48> TEX_GAP_STUB{
+    0x68, 0x01, 0x08, 0x36, 0x49, 0xE0, 0x3B, 0xD5, 0xCA, 0x92, 0x00, 0x90,
+    0x48, 0xD1, 0x47, 0xF9, 0x28, 0x01, 0x08, 0xCB, 0x0B, 0x00, 0x9F, 0x52,
+    0x8B, 0x24, 0xA0, 0x72, 0x1F, 0x01, 0x0B, 0xEB, 0x63, 0x00, 0x00, 0x54,
+    0x49, 0xD1, 0x07, 0xF9, 0x21, 0xC1, 0x2C, 0x17, 0x23, 0xC1, 0x2C, 0x17,
+};
+constexpr size_t TEX_GAP_STUB_OFFSET = 0x3C46DD0;
+constexpr std::array TEX_GAP_STATES{BuiltinPatchState{0x4E9EFA0, 0x8}};
+constexpr auto TEX_GAP_RECORDS = [] {
+    std::array<BuiltinPatchRecord, 1 + TEX_GAP_STUB.size() / 4> records{};
+    records[0] = BuiltinPatchRecord{0x777278, TEX_GAP_HOOK, TEX_GAP_ORIGINAL};
+    for (size_t i = 1, offset = 0; offset < TEX_GAP_STUB.size(); ++i, offset += 4) {
+        records[i] = BuiltinPatchRecord{TEX_GAP_STUB_OFFSET + offset,
+                                        std::span<const u8>{TEX_GAP_STUB}.subspan(offset, 4), {},
+                                        true};
+    }
+    return records;
+}();
+
 constexpr std::array BUILTIN_PATCHES{
     // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
     // instead of following the GPU-time controller down to its 480p floor.
@@ -476,6 +506,16 @@ constexpr std::array BUILTIN_PATCHES{
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = DYNAMIC_FPS_RECORDS,
         .states = DYNAMIC_FPS_STATES,
+    },
+    // The game's texture heap is tidied at most once a second instead of at every frame, so the
+    // textures it moves (and we remake) are made far less often in the market.
+    BuiltinPatch{
+        .name = "Texture heap tidy-up once a second (built-in)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = TEX_GAP_RECORDS,
+        .states = TEX_GAP_STATES,
     },
     // The NVIDIA DLSS quality lowers Ocarina's render resolution under Max Resolution, since DLSS
     // replaces the game's own 1440p -> 4K upscale and takes whatever the game renders.
