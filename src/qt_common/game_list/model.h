@@ -7,11 +7,13 @@
 #include <QFileSystemWatcher>
 #include <QStandardItemModel>
 #include <QStringList>
+#include <QTimer>
 #include <QVector>
 
 #include "common/common_types.h"
 #include "frontend_common/play_time_manager.h"
 #include "qt_common/config/uisettings.h"
+#include "qt_common/game_list/refresh_coalescer.h"
 
 namespace Core {
 class System;
@@ -94,4 +96,7 @@ private:
     std::unique_ptr<GameListWorker> current_worker;
     QFileSystemWatcher* watcher = nullptr;
     QFileSystemWatcher* external_watcher = nullptr;
+    /// Debounces watcher bursts: both kinds of event in one 30 ms window run once, one repopulate.
+    QTimer refresh_timer;
+    GameListRefresh::Coalescer pending_refreshes;
 };

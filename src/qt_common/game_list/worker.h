@@ -100,5 +100,9 @@ private:
     std::atomic_bool stop_requested = false;
     Common::Event processing_completed;
 
+    /// Rows reused from the parse cache and rows parsed from scratch, for the summary log line.
+    std::size_t reused_entries = 0;
+    std::size_t parsed_entries = 0;
+
     Core::System& system;
 };

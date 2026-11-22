@@ -31,10 +31,36 @@ GameListModel::GameListModel(std::shared_ptr<FileSys::VfsFilesystem> vfs_,
     watcher = new QFileSystemWatcher(this);
     external_watcher = new QFileSystemWatcher(this);
 
-    connect(watcher, &QFileSystemWatcher::directoryChanged, this,
-            &GameListModel::RefreshGameDirectory);
-    connect(external_watcher, &QFileSystemWatcher::directoryChanged, this,
-            &GameListModel::RefreshExternalContent);
+    // Watcher bursts (a game copied in, an update installed) arrive in the hundreds: coalesce
+    // 30 ms of them into one refresh. Both kinds are tracked independently, so one of each in the
+    // same window runs both, with a single repopulate.
+    refresh_timer.setSingleShot(true);
+    refresh_timer.setInterval(30);
+    connect(&refresh_timer, &QTimer::timeout, this, [this] {
+        const auto requested = pending_refreshes.Take();
+        if (!requested.external && !requested.game_dir) {
+            return;
+        }
+        if (requested.external) {
+            LOG_INFO(Frontend, "External content directory changed. Clearing metadata cache.");
+            QtCommon::Game::ResetMetadata(false);
+        }
+        if (requested.game_dir) {
+            ResetExternalWatcher();
+            LOG_INFO(Frontend, "Change detected in the games directory. Reloading game list.");
+        }
+        if (!UISettings::values.game_dirs.empty() && current_worker != nullptr) {
+            Repopulate();
+        }
+    });
+    connect(watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
+        pending_refreshes.OnGameDir();
+        refresh_timer.start();
+    });
+    connect(external_watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
+        pending_refreshes.OnExternal();
+        refresh_timer.start();
+    });
 
     ResetExternalWatcher();
 

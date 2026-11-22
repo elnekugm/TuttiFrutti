@@ -122,6 +122,7 @@
 
 #include "qt_common/abstract/frontend.h"
 
+#include "qt_common/game_list/parse_cache.h"
 #include "qt_common/qt_common.h"
 #include "qt_common/qt_string_lookup.h"
 
@@ -3179,6 +3180,7 @@ void MainWindow::OnGameListRemoveInstalledEntry(u64 program_id,
     }
     Common::FS::RemoveDirRecursively(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
                                      "game_list");
+    GameListParseCache::Invalidate();
     game_list->PopulateAsync(UISettings::values.game_dirs);
 }
 
@@ -3841,6 +3843,7 @@ void MainWindow::OnMenuInstallToNAND() {
     QMessageBox::information(this, tr("Install Results"), install_results);
     Common::FS::RemoveDirRecursively(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
                                      "game_list");
+    GameListParseCache::Invalidate();
     game_list->PopulateAsync(UISettings::values.game_dirs);
     ui->action_Install_File_NAND->setEnabled(true);
 }
@@ -4506,6 +4509,7 @@ void MainWindow::OnConfigure() {
                 Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) / "game_list")) {
             LOG_WARNING(Frontend, "Failed to remove game metadata cache files");
         }
+        GameListParseCache::Invalidate();
 
         // Explicitly save the game directories, since reinitializing config does not explicitly do
         // so.
@@ -4932,11 +4936,14 @@ void MainWindow::OnVerifyInstalledContents() {
 
 void MainWindow::OnInstallFirmware() {
     QtCommon::Content::InstallFirmware();
+    // New firmware can change how titles parse: the next scan must start from the files.
+    GameListParseCache::Invalidate();
     OnCheckFirmwareDecryption();
 }
 
 void MainWindow::OnInstallFirmwareFromZIP() {
     QtCommon::Content::InstallFirmwareZip();
+    GameListParseCache::Invalidate();
     OnCheckFirmwareDecryption();
 }
 
@@ -4947,6 +4954,8 @@ void MainWindow::OnInstallDecryptionKeys() {
         return;
 
     QtCommon::Content::InstallKeys();
+    // New keys can change what a dump resolves to: the next scan must start from the files.
+    GameListParseCache::Invalidate();
 
     game_list->PopulateAsync(UISettings::values.game_dirs);
     OnCheckFirmwareDecryption();

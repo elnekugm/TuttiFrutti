@@ -34,6 +34,7 @@
 #include "core/loader/nx.h"
 
 #include "qt_common/config/uisettings.h"
+#include "qt_common/game_list/parse_cache.h"
 #include "qt_common/qt_common.h"
 
 #include "qt_common/game_list/game_list_p.h"
@@ -313,13 +314,14 @@ QString FormatPatchNameVersions(const FileSys::PatchManager& patch_manager,
     return out;
 }
 
-QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::string& name,
-                                        const std::size_t size, const std::vector<u8>& icon,
-                                        Loader::AppLoader& loader, u64 program_id,
-                                        const PlayTime::PlayTimeManager& play_time_manager,
-                                        const FileSys::PatchManager& patch) {
+// The expensive half of a row: the container stays closed after this, so the plain result can be
+// cached and the row rebuilt without touching the file again.
+GameListParseCache::EntryData MakeEntryData(const std::string& path, const std::string& name,
+                                            const std::size_t size, const std::vector<u8>& icon,
+                                            Loader::AppLoader& loader, u64 program_id,
+                                            const FileSys::PatchManager& patch) {
     auto const file_type = loader.GetFileType();
-    auto const file_type_string = QString::fromStdString(Loader::GetFileTypeString(file_type));
+    auto const file_type_string = Loader::GetFileTypeString(file_type);
 
     QString patch_versions = GetGameListCachedObject(
         fmt::format("{:016X}", patch.GetTitleID()), "pv.txt", [&patch, &loader] {
@@ -341,21 +343,73 @@ QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::stri
         }
     }
 
-    u64 play_time = play_time_manager.GetPlayTime(program_id);
+    GameListParseCache::EntryData data;
+    data.path = path;
+    data.name = name;
+    data.icon = icon;
+    data.file_type_string = file_type_string;
+    data.program_id = program_id;
+    data.size = size;
+    data.patch_versions = patch_versions.toStdString();
+    data.loose_dump = IsExtractedNCAMain(path);
+    return data;
+}
+
+QList<QStandardItem*> BuildRow(const GameListParseCache::EntryData& data, u64 play_time) {
     // Artwork the user picked replaces the icon from the game file, and so does downloaded cover
-    // art (the same picture at a higher resolution).
-    const std::vector<u8> custom_artwork = QtCommon::Game::ReadLibraryArtwork(program_id);
-    // So does the name the user gave the game in Properties.
-    const std::string custom_title = QtCommon::Game::ReadCustomTitle(program_id);
-    return QList<QStandardItem*>{
-        new GameListItemPath(FormatGameName(path), custom_artwork.empty() ? icon : custom_artwork,
-                             QString::fromStdString(custom_title.empty() ? name : custom_title),
-                             file_type_string, program_id, play_time, patch_versions),
-        new GameListItem(file_type_string),
-        new GameListItemSize(size),
+    // art (the same picture at a higher resolution). Both, and the name the user gave the game,
+    // are read now rather than cached: they change while the file does not.
+    const std::vector<u8> custom_artwork = QtCommon::Game::ReadLibraryArtwork(data.program_id);
+    const std::string custom_title = QtCommon::Game::ReadCustomTitle(data.program_id);
+    QList<QStandardItem*> entry{
+        new GameListItemPath(
+            FormatGameName(data.path), custom_artwork.empty() ? data.icon : custom_artwork,
+            QString::fromStdString(custom_title.empty() ? data.name : custom_title),
+            QString::fromStdString(data.file_type_string), data.program_id, play_time,
+            QString::fromStdString(data.patch_versions)),
+        new GameListItem(QString::fromStdString(data.file_type_string)),
+        new GameListItemSize(data.size),
         new GameListItemPlayTime(play_time),
-        new GameListItem(patch_versions),
+        new GameListItem(QString::fromStdString(data.patch_versions)),
     };
+    if (data.loose_dump) {
+        entry[GameListModel::COLUMN_SIZE]->setText(QObject::tr("Calculating..."));
+        entry[GameListModel::COLUMN_SIZE]->setToolTip(
+            QObject::tr("The folder size is calculated after the game list is shown."));
+    }
+    return entry;
+}
+
+QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::string& name,
+                                        const std::size_t size, const std::vector<u8>& icon,
+                                        Loader::AppLoader& loader, u64 program_id,
+                                        const PlayTime::PlayTimeManager& play_time_manager,
+                                        const FileSys::PatchManager& patch) {
+    return BuildRow(MakeEntryData(path, name, size, icon, loader, program_id, patch),
+                    play_time_manager.GetPlayTime(program_id));
+}
+
+// A file's identity for the parse cache: the discovery path is canonical by construction (it is
+// always built by walking the configured game directories), and size + mtime catch every edit that
+// matters to the row.
+struct FileFingerprint {
+    bool valid = false;
+    u64 size = 0;
+    s64 mtime_ns = 0;
+};
+
+FileFingerprint FingerprintFile(const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec) {
+        return {};
+    }
+    const auto mtime = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+        return {};
+    }
+    return {true, size,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(mtime.time_since_epoch()).count()};
 }
 } // Anonymous namespace
 
@@ -478,6 +532,36 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
     const auto process_candidate = [this, target,
                                     parent_dir](const std::filesystem::path& path) {
         const auto physical_name = Common::FS::PathToUTF8String(path);
+
+        // The incremental refresh, list pass: a file whose path, size and modification time match
+        // the last scan reuses its parsed row, so only new or modified files pay the container
+        // parse at all. Play time and the user's artwork/title are looked up when the row is
+        // rebuilt, not cached. (The provider pass below never takes this branch.)
+        FileFingerprint fingerprint{};
+        if (target == ScanTarget::PopulateGameList) {
+            fingerprint = FingerprintFile(path);
+            if (fingerprint.valid) {
+                if (const auto* cached = GameListParseCache::Global().Find(
+                        physical_name, fingerprint.size, fingerprint.mtime_ns);
+                    cached != nullptr) {
+                    auto pending = std::make_shared<PendingRow>(
+                        BuildRow(*cached, play_time_manager.GetPlayTime(cached->program_id)));
+                    RecordEvent([=](GameListModel* model) {
+                        model->AddEntry(pending->Release(), parent_dir);
+                    });
+                    if (cached->loose_dump) {
+                        std::scoped_lock event_lock(lock);
+                        if (std::find(loose_dumps.begin(), loose_dumps.end(), physical_name) ==
+                            loose_dumps.end()) {
+                            loose_dumps.push_back(physical_name);
+                        }
+                    }
+                    ++reused_entries;
+                    return;
+                }
+            }
+        }
+
         const auto file = vfs->OpenFile(physical_name, FileSys::OpenMode::Read);
         if (!file) {
             return;
@@ -558,9 +642,10 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
             std::vector<u64> program_ids;
             loader->ReadProgramIds(program_ids);
 
-            const auto addEntry = [this, physical_name,
-                                   parent_dir](std::unique_ptr<Loader::AppLoader>& app_loader,
-                                               const u64 id) {
+            const auto addEntry = [this, physical_name, parent_dir, fingerprint,
+                                   cacheable = fingerprint.valid && program_ids.size() <= 1](
+                                              std::unique_ptr<Loader::AppLoader>& app_loader,
+                                              const u64 id) {
                 std::vector<u8> icon;
                 [[maybe_unused]] const auto res1 = app_loader->ReadIcon(icon);
 
@@ -587,13 +672,15 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
                 const bool loose_dump = IsExtractedNCAMain(physical_name);
                 const u64 size = loose_dump ? 0 : Common::FS::GetSize(physical_name);
 
-                auto entry = MakeGameListEntry(physical_name, name, size, icon, *app_loader, id,
-                                               play_time_manager, patch);
+                auto data = MakeEntryData(physical_name, name, size, icon, *app_loader, id, patch);
+                // One path, one row: a container with several programs is not cached.
+                if (cacheable) {
+                    GameListParseCache::Global().Store(data, fingerprint.size,
+                                                       fingerprint.mtime_ns);
+                }
+                auto entry = BuildRow(data, play_time_manager.GetPlayTime(id));
 
                 if (loose_dump) {
-                    entry[GameListModel::COLUMN_SIZE]->setText(tr("Calculating..."));
-                    entry[GameListModel::COLUMN_SIZE]->setToolTip(
-                        tr("The folder size is calculated after the game list is shown."));
                     if (std::find(loose_dumps.begin(), loose_dumps.end(), physical_name) ==
                         loose_dumps.end()) {
                         loose_dumps.push_back(physical_name);
@@ -603,6 +690,7 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
                 RecordEvent([=](GameListModel* model) {
                     model->AddEntry(pending->Release(), parent_dir);
                 });
+                ++parsed_entries;
             };
 
             if (res2 == Loader::ResultStatus::Success && program_ids.size() > 1 &&
@@ -644,6 +732,8 @@ void GameListWorker::run() {
     const auto started = std::chrono::steady_clock::now();
     watch_list.clear();
 loose_dumps.clear();
+    reused_entries = 0;
+    parsed_entries = 0;
     // The scan re-adds every update and add-on from the game folders. Keep the current entries
     // so a cancelled scan can put them back: a boot cancels the scan that stopping a game
     // starts (Restart does at once), and the game then loaded without its update.
@@ -708,10 +798,13 @@ loose_dumps.clear();
     }
 
     watch_list.removeDuplicates();
-    LOG_INFO(Frontend, "Game discovery finished: elapsed_ms={} watched={} cancelled={}",
-             std::chrono::duration_cast<std::chrono::milliseconds>(
-                 std::chrono::steady_clock::now() - started).count(),
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - started)
+                                .count();
+    LOG_INFO(Frontend, "Game discovery finished: elapsed_ms={} watched={} cancelled={}", elapsed_ms,
              watch_list.size(), stop_requested.load());
+    LOG_INFO(Frontend, "library refresh: {} entries, {} reused, {} parsed, {} ms",
+             reused_entries + parsed_entries, reused_entries, parsed_entries, elapsed_ms);
     RecordEvent([this](GameListModel* model) { model->DonePopulating(watch_list); });
 
     // Loose dump folders are sized once the list is shown: walking their RomFS during discovery
