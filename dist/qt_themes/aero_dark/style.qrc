@@ -1,0 +1,8 @@
+<!--
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+<RCC>
+    <qresource prefix="aero_dark">
+        <file>style.qss</file>
+    </qresource>
+</RCC>
