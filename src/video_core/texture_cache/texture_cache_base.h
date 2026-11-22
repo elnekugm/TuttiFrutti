@@ -541,6 +541,10 @@ private:
     /// Refresh the contents (pixel data) of an image
     [[nodiscard]] bool IsDownloadable(const ImageBase& image) const noexcept;
 
+    /// Whether `image` is the newest image on the memory it overlaps and the game keeps it
+    /// (EDEN_NX2_TC_KEEP_NEWEST, Kirby Air Riders' baked vertex lighting).
+    [[nodiscard]] bool IsNewestWritten(const ImageBase& image);
+
     void RefreshContents(Image& image, ImageId image_id);
 
     /// Host RAM ran out for an upload or write-back copy (issue #8): count it, log at most every

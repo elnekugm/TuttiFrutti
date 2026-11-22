@@ -201,8 +201,11 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory, bool at_critical) 
             (evict_bad_overlaps && False(image.flags & ImageFlagBits::BadOverlap))) {
             return false;
         }
+        // A bad overlap goes without a download, except the newest image on its memory
+        // (IsNewestWritten).
         const bool must_download =
-            IsDownloadable(image) && False(image.flags & ImageFlagBits::BadOverlap);
+            IsDownloadable(image) &&
+            (False(image.flags & ImageFlagBits::BadOverlap) || IsNewestWritten(image));
         if (out_must_download != nullptr) {
             *out_must_download = must_download;
         }
@@ -1621,6 +1624,29 @@ void TextureCache<P>::WriteMemory(DAddr cpu_addr, size_t size) {
         if (True(image.flags & ImageFlagBits::Tracked)) {
             UntrackImage(image, image_id);
         }
+    });
+}
+
+template <class P>
+bool TextureCache<P>::IsNewestWritten(const ImageBase& image) {
+    // EDEN_NX2_TC_KEEP_NEWEST=0 turns it off. Kirby Air Riders renders each mesh's baked vertex
+    // lighting once, at level load, into small render targets (R11G11B10, 64 or 4096 wide) in
+    // memory that held other textures before, and its vertex shaders sample them whenever the mesh
+    // is drawn. The older images on that memory made each one a bad overlap, so the collector
+    // deleted it without writing it back and its next use read the old textures' bytes from guest
+    // memory as vertex colours: fences, planks and walls glowing in random colours. The newest
+    // image on that memory is kept. Ported from Satsuma (FilDev, GPL-3.0).
+    static const bool keep_newest = [] {
+        const char* const value = std::getenv("EDEN_NX2_TC_KEEP_NEWEST");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (!keep_newest || False(image.flags & ImageFlagBits::GpuModified) ||
+        Settings::GetCurrentProgramID() != KirbyAirRidersProgramId) {
+        return false;
+    }
+    // Watched again when a later image overlaps it (JoinImages).
+    return std::ranges::none_of(image.overlapping_images, [&](ImageId other_id) {
+        return slot_images[other_id].birth_tick > image.birth_tick;
     });
 }
 

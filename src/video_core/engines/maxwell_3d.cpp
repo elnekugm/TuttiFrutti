@@ -13,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <fmt/ranges.h>
 #include "common/assert.h"
 #include "common/bit_util.h"
@@ -1954,6 +1955,17 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
     }
 }
 
+namespace {
+/// Split front: 3D macros whose front run failed. Kirby Air Riders' 0x1e7 looped a million steps
+/// on a count its DMA read took before the back had written it, and the half-run macro's draws
+/// hung the GPU. From their first failure, these macros' DMA reads wait for the back, as
+/// EDEN_NX2_MACRO_DMA_DRAIN=1 makes every read do. Front thread only. From Satsuma (FilDev).
+std::unordered_set<u32>& FrontDrainedMacros() {
+    static std::unordered_set<u32> macros;
+    return macros;
+}
+} // Anonymous namespace
+
 void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split,
                               FrontState& fs) {
     const u32 method = fs.executing_macro;
@@ -2016,6 +2028,12 @@ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split
             engine.native_execution_failed = true;
             LOG_ERROR(HW_GPU, "Native MME (split front) failed: start={:#x}, consumed={}/{}, error={}",
                       start, result.consumed, parameter_count, result.error);
+            if (FrontDrainedMacros().insert(method).second) {
+                LOG_WARNING(HW_GPU,
+                            "Split front: macro {:#x} (start {:#x}) failed; its DMA reads now wait "
+                            "for the GPU work before them",
+                            method, start);
+            }
         }
     }
     if (trace != nullptr) {
@@ -2361,7 +2379,11 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     // GpuSplit::WaitForWrites). Past it no entry can make them GPU-written or add reports there,
     // so the caches have nothing to write out unless they already hold it now.
     const bool waited = split.WaitForWrites(memory_manager, source, read_bytes);
+    // A macro whose front run failed may count on words the back has not written yet: from its
+    // first failure its reads drain the split, as EDEN_NX2_MACRO_DMA_DRAIN does for every read.
+    const bool failed_macro = FrontDrainedMacros().contains(macro);
     const bool drained =
+        failed_macro ||
         memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache) ||
         VideoCommon::QueryDma::HoldsReports(memory_manager, *rasterizer, source, read_bytes);
     if (drained) {

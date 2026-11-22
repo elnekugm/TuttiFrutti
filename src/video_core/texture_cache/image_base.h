@@ -135,6 +135,10 @@ struct ImageBase {
     u64 newest_alias_tick = 0;
     /// frame_tick + 1 of the first frame a render pass other than a clear wrote it, or 0.
     u64 first_written_frame = 0;
+    /// Creation order, a counter raised at construction: IsNewestWritten keeps the image made last
+    /// among the ones overlapping its memory, whatever wrote over what (Kirby Air Riders' baked
+    /// vertex lighting renders into memory that held other textures before).
+    u64 birth_tick = 0;
     /// Levels whose every layer a shader last wrote through a storage view. Any other GPU write
     /// (render pass, clear, copy, alias copy) and an upload from guest memory clear them.
     u32 storage_written_levels = 0;

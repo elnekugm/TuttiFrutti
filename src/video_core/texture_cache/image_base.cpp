@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -22,6 +23,9 @@ using VideoCore::Surface::DefaultBlockHeight;
 using VideoCore::Surface::DefaultBlockWidth;
 
 namespace {
+/// Creation order for ImageBase::birth_tick (IsNewestWritten).
+std::atomic<u64> next_birth_tick{1};
+
 /// Returns the base layer and mip level offset
 [[nodiscard]] std::pair<s32, s32> LayerMipOffset(s32 diff, u32 layer_stride) {
     if (layer_stride == 0) {
@@ -64,7 +68,9 @@ ImageBase::ImageBase(const ImageInfo& info_, GPUVAddr gpu_addr_, VAddr cpu_addr_
       unswizzled_size_bytes{CalculateUnswizzledSizeBytes(info)},
       converted_size_bytes{CalculateConvertedSizeBytes(info)}, scale_rating{}, scale_tick{},
       has_scaled{}, gpu_addr{gpu_addr_}, cpu_addr{cpu_addr_},
-      cpu_addr_end{cpu_addr + guest_size_bytes}, mip_level_offsets{CalculateMipLevelOffsets(info)} {
+      cpu_addr_end{cpu_addr + guest_size_bytes},
+      birth_tick{next_birth_tick.fetch_add(1, std::memory_order_relaxed)},
+      mip_level_offsets{CalculateMipLevelOffsets(info)} {
     if (info.type == ImageType::e3D) {
         slice_offsets = CalculateSliceOffsets(info);
         slice_subresources = CalculateSliceSubresources(info);

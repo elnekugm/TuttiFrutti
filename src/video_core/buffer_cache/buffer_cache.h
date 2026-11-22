@@ -4399,8 +4399,21 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
         return NULL_BINDING;
     }
 
+    // A written native compute pointer takes a size word above 8 MiB too: Kirby Air Riders'
+    // particle pool is 64 MiB of 1 KiB pages that its emitter update shaders write, and a cap at
+    // 8 MiB dropped every write past page 8192 (its free list filled with junk: missing UI,
+    // streaks, glowing polygons and a GPU hang in a geometry shader). On for that game only: the
+    // write mark of such a binding grows with it. Ported from Satsuma (FilDev, GPL-3.0).
+    static const bool written_size_word = [] {
+        const char* const value = std::getenv("EDEN_NX2_SSBO_WRITTEN_SIZE_WORD");
+        return value == nullptr || value[0] != '0';
+    }();
+    const bool written_size = written_size_word && native_pointer && compute && is_written &&
+                              !table_pointer &&
+                              Settings::GetCurrentProgramID() == KirbyAirRidersProgramId;
     const bool reads_size_word =
-        !(table_pointer && !is_written) && (!native_pointer || (compute && !is_written));
+        !(table_pointer && !is_written) &&
+        (!native_pointer || (compute && !is_written) || written_size);
     const u64 next_qword = reads_size_word ? gpu_memory->Read<u64>(ssbo_addr + 8) : 0;
     const u32 alignment = runtime.GetStorageBufferAlignment();
     struct CachedBinding {
@@ -4416,7 +4429,7 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
     thread_local std::array<std::array<CachedBinding, ways>, 512> binding_cache{};
     const u32 flags =
         (is_written ? 1U : 0U) | (native_pointer ? 2U : 0U) | (table_pointer ? 4U : 0U) |
-        (compute ? 8U : 0U);
+        (compute ? 8U : 0U) | (written_size ? 16U : 0U);
     const size_t owner = gpu_memory->GetID() + 1;
     // A cached binding is only safe to reuse while no page-table update is in flight: a service
     // thread could otherwise reuse one against a half-updated map. No generation: neither read
@@ -4461,9 +4474,9 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
                 // Mario Kart World's lighting passes read past 8 MiB from theirs, inside the size
                 // word after the pointer (Eglantine #609 reads it): capped at 8 MiB those reads
                 // came back zero and lit land and characters too dark. A read-only compute binding
-                // takes a larger size word. Binding to the end of the mapping instead spanned
-                // Ocarina of Time's ~1 GiB heap and backed it with a 1 GiB buffer.
-                if (compute && !is_written && next_qword_is_size && packed_size > bare) {
+                // takes a larger size word, and a written one on the game the switch names above.
+                if (compute && (!is_written || written_size) && next_qword_is_size &&
+                    packed_size > bare) {
                     return (std::min)(packed_size, limit);
                 }
                 return bare;
