@@ -139,6 +139,9 @@ struct ImageBase {
     /// (render pass, clear, copy, alias copy) and an upload from guest memory clear them.
     u32 storage_written_levels = 0;
     size_t lru_index = SIZE_MAX;
+    /// The frame of its last use, kept by EDEN_NX2_TC_THRASH_GUARD to tell a texture the game
+    /// keeps coming back to from one it only touched once.
+    u64 last_use_tick = 0;
 
     std::array<u32, MAX_MIP_LEVELS> mip_level_offsets{};
 

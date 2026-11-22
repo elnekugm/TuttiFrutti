@@ -816,6 +816,50 @@ private:
     u64 modification_tick = 0;
     u64 frame_tick = 0;
 
+    /// EDEN_NX2_TC_THRASH_GUARD: what a deleted image left behind, to recognise it when the game
+    /// asks for it again. Direct-mapped by address and shape; a collision forgets the older one.
+    struct ThrashGhost {
+        GPUVAddr gpu_addr{}; ///< 0 = empty
+        u64 shape{};
+        u64 last_use{};
+        u32 kib{};
+        bool pressured{}; ///< Taken by the collector while it was over its budget
+        bool costly{};    ///< CostlyLoad: ASTC or BCn that is decoded again
+    };
+    static constexpr size_t ThrashGhostSlots = 8192;
+    /// Reuse intervals by size: up to 4, 8, 16 ... 1024 frames.
+    static constexpr size_t ThrashBuckets = 9;
+    static constexpr u64 ThrashMaxFloor = 600; ///< Frames; ~10 s at 60 fps
+    std::vector<ThrashGhost> thrash_ghosts; ///< Empty until the first delete with the guard on
+    std::array<u32, ThrashBuckets> thrash_window{}; ///< Pressured remakes since the last check
+    u64 thrash_floor{};       ///< The collector leaves images used this recently alone
+    u64 thrash_calm_frames{}; ///< Frames without pressure, for the floor's decay
+    struct ThrashStats {
+        u64 made{};
+        u64 remade{};
+        u64 remade_kib{};
+        u64 remade_costly{};
+        u64 interval_sum{};
+        u32 raised{};
+        u32 capped{};
+    } thrash_stats;
+    /// The ghost slot of an address and shape.
+    [[nodiscard]] static size_t ThrashSlot(GPUVAddr gpu_addr, u64 shape) noexcept {
+        const u64 mixed = ((gpu_addr >> 8) ^ shape) * 0x9E3779B97F4A7C15ULL;
+        return static_cast<size_t>(mixed >> 51); // 13 bits: ThrashGhostSlots
+    }
+    /// The shape of an image, for the ghost: what makes two images the same for the game.
+    [[nodiscard]] static u64 ThrashShapeKey(const ImageInfo& info) noexcept {
+        return (u64{static_cast<u32>(info.format) & 0xFF} << 56) |
+               (u64{info.num_samples & 0xF} << 52) |
+               (u64{static_cast<u32>(info.resources.levels) & 0xF} << 48) |
+               (u64{static_cast<u32>(info.resources.layers) & 0xFFF} << 36) |
+               (u64{info.size.width & 0x3FFFF} << 18) | (info.size.height & 0x3FFFF);
+    }
+    void NoteThrashDelete(const Image& image, bool pressured);
+    void NoteThrashMade(const ImageInfo& info, GPUVAddr gpu_addr);
+    void TickThrashGuard();
+
     Common::ThreadWorker texture_decode_worker{1, "TextureDecoder", {},
                                                Common::ThreadPlacement::Efficiency};
     std::vector<std::unique_ptr<AsyncDecodeContext>> async_decodes;
