@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <memory>
+#include <QPointer>
 #include <QString>
 #include <QWidget>
 #include <QtGlobal>
@@ -33,6 +34,9 @@ class QGraphicsOpacityEffect;
 class QMovie;
 class QPropertyAnimation;
 class QPushButton;
+class QMessageBox;
+class QAbstractButton;
+class ControllerNavigation;
 
 class LoadingScreen : public QWidget {
     Q_OBJECT
@@ -56,6 +60,12 @@ public:
     /// Hides the LoadingScreen with a fade out effect
     void OnLoadComplete();
 
+    /// Asks before skipping the shader preparation the loading screen is showing
+    void ConfirmSkip();
+
+    /// A: ask to skip, or confirm an open skip dialog; B: close it
+    void OnControllerKey(Qt::Key key);
+
     // In order to use a custom widget with a stylesheet, you need to override the paintEvent
     // See https://wiki.qt.io/How_to_Change_the_Background_Color_of_QWidget
     void paintEvent(QPaintEvent* event) override;
@@ -78,6 +88,9 @@ private:
 
     QGraphicsOpacityEffect* opacity_effect = nullptr;
     QPushButton* skip_button = nullptr;
+    QPointer<QMessageBox> skip_confirm;
+    QPointer<QAbstractButton> skip_confirm_primary;
+    ControllerNavigation* controller_navigation = nullptr;
     std::unique_ptr<QPropertyAnimation> fadeout_animation;
 
     // Definitions for the differences in text and styling for each stage

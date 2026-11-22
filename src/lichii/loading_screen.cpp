@@ -8,6 +8,7 @@
 #include <QGraphicsOpacityEffect>
 #include <QIODevice>
 #include <QImage>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
 #include <QPropertyAnimation>
@@ -16,10 +17,12 @@
 #include "common/container/unordered_map.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "core/loader/loader.h"
+#include "qt_common/qt_common.h"
 #include "ui_loading_screen.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
 #include "lichii/loading_screen.h"
+#include "lichii/util/controller_navigation.h"
 
 // Mingw seems to not have QMovie at all. If QMovie is missing then use a single frame instead of an
 // showing the full animation
@@ -103,10 +106,14 @@ LoadingScreen::LoadingScreen(QWidget* parent)
                                "on a later launch."));
     skip_button->hide();
     ui->verticalLayout->insertWidget(2, skip_button, 0, Qt::AlignHCenter | Qt::AlignTop);
-    connect(skip_button, &QPushButton::clicked, this, [this] {
-        VideoCommon::ShaderWarm::RequestSkipWarm();
-        skip_button->setEnabled(false);
-    });
+    connect(skip_button, &QPushButton::clicked, this, &LoadingScreen::ConfirmSkip);
+
+    // A controller can skip too: A asks and A again confirms, B goes back.
+    if (QtCommon::system) {
+        controller_navigation = new ControllerNavigation(QtCommon::system->HIDCore(), this);
+        connect(controller_navigation, &ControllerNavigation::TriggerKeyboardEvent, this,
+                &LoadingScreen::OnControllerKey);
+    }
     qRegisterMetaType<VideoCore::LoadCallbackStage>();
 
     stage_translations = {
@@ -175,6 +182,10 @@ void LoadingScreen::OnLoadProgress(VideoCore::LoadCallbackStage stage, std::size
             (stage == VideoCore::LoadCallbackStage::Build &&
              VideoCommon::ShaderWarm::PrecompileCachedWaiting()));
         skip_button->setEnabled(true);
+        // Preparation can finish while its confirmation is still open.
+        if (skip_confirm) {
+            skip_confirm->close();
+        }
         previous_stage = stage;
         // reset back to fast shader compiling since the stage changed
         slow_shader_compile_start = false;
@@ -221,6 +232,50 @@ void LoadingScreen::OnLoadProgress(VideoCore::LoadCallbackStage stage, std::size
     ui->value->setText(estimate);
     ui->progress_bar->setValue(static_cast<int>(value));
     previous_time = now;
+}
+
+void LoadingScreen::ConfirmSkip() {
+    if (skip_confirm) {
+        return;
+    }
+    // On the main window: the loading screen's own style sheet would otherwise apply to the dialog.
+    auto* const box = new QMessageBox(
+        QMessageBox::Warning, tr("Skip Preparing Shaders?"),
+        tr("The game starts right away, but it can stutter while the shaders that are not prepared "
+           "yet are prepared during play.\n\nA later launch continues where this one stops.\n\n"
+           "Controller: A skips, B goes back."),
+        QMessageBox::Cancel, window());
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    QPushButton* const skip = box->addButton(tr("Skip"), QMessageBox::AcceptRole);
+    skip->setDefault(true);
+    connect(box, &QMessageBox::buttonClicked, this, [this, skip](QAbstractButton* button) {
+        if (button == skip) {
+            VideoCommon::ShaderWarm::RequestSkipWarm();
+            skip_button->setEnabled(false);
+        }
+    });
+    skip_confirm = box;
+    skip_confirm_primary = skip;
+    box->open();
+}
+
+void LoadingScreen::OnControllerKey(Qt::Key key) {
+    if (!isVisible()) {
+        return;
+    }
+    const bool a = key == Qt::Key_Return || key == Qt::Key_Enter;
+    const bool b = key == Qt::Key_Escape;
+    if (skip_confirm) {
+        if (a && skip_confirm_primary) {
+            skip_confirm_primary->click();
+        } else if (b) {
+            skip_confirm->close();
+        }
+        return;
+    }
+    if (a && skip_button->isVisible() && skip_button->isEnabled()) {
+        ConfirmSkip();
+    }
 }
 
 void LoadingScreen::paintEvent(QPaintEvent* event) {
