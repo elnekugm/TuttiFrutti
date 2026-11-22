@@ -64,6 +64,7 @@ SETTING(u16, false);
 SWITCHABLE(AnisotropyMode, true);
 SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
+SWITCHABLE(OcarinaShadowSize, false);
 SWITCHABLE(NvidiaDlssQuality, false);
 SWITCHABLE(NvidiaDlssPreset, false);
 SWITCHABLE(HdrMode, false);
@@ -450,6 +451,9 @@ struct Values {
                                                            true,
                                                            true};
     SwitchableSetting<bool> ocarina_fsr{linkage, false, "ocarina_fsr", Category::Renderer};
+    // The resolution of Ocarina of Time's local depth shadow atlas (12288x12288 at Full).
+    SwitchableSetting<OcarinaShadowSize> ocarina_local_shadow_size{
+        linkage, OcarinaShadowSize::Full, "ocarina_local_shadow_size", Category::RendererAdvanced};
     // AMD FSR 4 in place of FSR 3.1 where FSR replaces a game's upscaler (Windows, AMD's driver).
     SwitchableSetting<bool> amd_fsr4{linkage, false, "amd_fsr4", Category::Renderer};
     SwitchableSetting<AspectRatio, true> aspect_ratio{linkage,
@@ -698,6 +702,8 @@ struct Values {
                                                            Specialization::Default,
                                                            true,
                                                            true};
+    SwitchableSetting<bool> skip_unbuilt_mesh_draws{linkage, true, "skip_unbuilt_mesh_draws",
+                                                    Category::RendererAdvanced};
 
     SwitchableSetting<u32, true> native_pipeline_wait_ms{linkage,
                                                          8,

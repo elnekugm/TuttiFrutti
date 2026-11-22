@@ -75,6 +75,8 @@ struct BuiltinPatch {
     // Applies only with NVIDIA DLSS on at this quality in docked mode, and is not listed in
     // Add-Ons.
     std::optional<Settings::NvidiaDlssQuality> dlss_quality{};
+    // Applies only when this local shadow size is selected, and is not listed in Add-Ons.
+    std::optional<Settings::OcarinaShadowSize> shadow_size{};
     // Applies (and is listed) only while this returns true: a card that cannot hold what the
     // patch costs keeps the game's own behaviour instead (see MaxResolutionFits).
     bool (*setting_enabled)() = nullptr;
@@ -468,6 +470,24 @@ constexpr auto TEX_GAP_RECORDS = [] {
     return records;
 }();
 
+// The local depth shadow atlas (scenery and NPC shadows, sampled in the Market) is a D16
+// 12288x12288 image (288 MiB) sized by two immediates: movz w3/w4, #0x3000 -> #0x1800 makes it
+// 6144x6144 (72 MiB), #0xC00 3072x3072 (18 MiB).
+constexpr std::array<u8, 4> LOCAL_SHADOW_WIDTH_ORIGINAL{0x03, 0x00, 0x86, 0x52};
+constexpr std::array<u8, 4> LOCAL_SHADOW_HEIGHT_ORIGINAL{0x04, 0x00, 0x86, 0x52};
+constexpr std::array<u8, 4> LOCAL_SHADOW_WIDTH_HALF{0x03, 0x00, 0x83, 0x52};
+constexpr std::array<u8, 4> LOCAL_SHADOW_HEIGHT_HALF{0x04, 0x00, 0x83, 0x52};
+constexpr std::array<u8, 4> LOCAL_SHADOW_WIDTH_QUARTER{0x03, 0x80, 0x81, 0x52};
+constexpr std::array<u8, 4> LOCAL_SHADOW_HEIGHT_QUARTER{0x04, 0x80, 0x81, 0x52};
+constexpr std::array LOCAL_SHADOW_HALF_RECORDS{
+    BuiltinPatchRecord{0xC30C24, LOCAL_SHADOW_WIDTH_HALF, LOCAL_SHADOW_WIDTH_ORIGINAL},
+    BuiltinPatchRecord{0xC30C2C, LOCAL_SHADOW_HEIGHT_HALF, LOCAL_SHADOW_HEIGHT_ORIGINAL},
+};
+constexpr std::array LOCAL_SHADOW_QUARTER_RECORDS{
+    BuiltinPatchRecord{0xC30C24, LOCAL_SHADOW_WIDTH_QUARTER, LOCAL_SHADOW_WIDTH_ORIGINAL},
+    BuiltinPatchRecord{0xC30C2C, LOCAL_SHADOW_HEIGHT_QUARTER, LOCAL_SHADOW_HEIGHT_ORIGINAL},
+};
+
 constexpr std::array BUILTIN_PATCHES{
     // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
     // instead of following the GPU-time controller down to its 480p floor.
@@ -542,6 +562,23 @@ constexpr std::array BUILTIN_PATCHES{
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = RENDER_ULTRA_RECORDS,
         .dlss_quality = Settings::NvidiaDlssQuality::UltraPerformance,
+    },
+    // The Ocarina local shadow size setting: Full leaves the atlas alone.
+    BuiltinPatch{
+        .name = "Local shadow size Half (built-in)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = LOCAL_SHADOW_HALF_RECORDS,
+        .shadow_size = Settings::OcarinaShadowSize::Half,
+    },
+    BuiltinPatch{
+        .name = "Local shadow size Quarter (built-in)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = LOCAL_SHADOW_QUARTER_RECORDS,
+        .shadow_size = Settings::OcarinaShadowSize::Quarter,
     },
 };
 
@@ -1060,6 +1097,10 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
             if (!wanted) {
                 continue;
             }
+        }
+        if (patch.shadow_size &&
+            Settings::values.ocarina_local_shadow_size.GetValue() != *patch.shadow_size) {
+            continue;
         }
         if (patch.build_id != build_id) {
             LOG_INFO(Loader, "    - Skipping \"{}\": build id {} is not {}", patch.name, build_id,
@@ -1728,7 +1769,7 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
     }
 
     for (const auto& patch : BUILTIN_PATCHES) {
-        if (patch.title_id != title_id || patch.dlss_quality ||
+        if (patch.title_id != title_id || patch.dlss_quality || patch.shadow_size ||
             (patch.setting_enabled && !patch.setting_enabled())) {
             continue;
         }

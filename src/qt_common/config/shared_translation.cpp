@@ -199,6 +199,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Replaces Ocarina of Time's native upscaler using scene depth and camera motion. "
               "Works on any supported Vulkan GPU. NVIDIA DLSS takes precedence when enabled and "
               "available. RCAS Sharpness controls sharpening. Takes effect when a game starts."));
+    INSERT(Settings, ocarina_local_shadow_size, tr("Local shadow size"),
+           tr("Size of the shadow map for nearby objects in Ocarina of Time's towns. Half saves "
+              "about 216 MB of video memory, Quarter about 270 MB. Shadows look nearly the same. "
+              "Restart the game to apply."));
 #if defined(__linux__) && !defined(__ANDROID__)
     INSERT(Settings, amd_fsr4, tr("Use FSR 4 (fsr4-vk community Vulkan port) in place of FSR 3.1"),
            tr("Uses fsr4-vk, a community Vulkan port of AMD's ML-based FSR 4.1.1 that TuttiFrutti's "
@@ -425,6 +429,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "stalls on new content). Skip drops that work, which can leave an effect missing "
               "for a few frames. Bounded (default) waits up to the time below per frame, then "
               "skips. The EDEN_NX2_ASYNC_DISCARD=1 environment variable still forces Skip."));
+    INSERT(Settings, skip_unbuilt_mesh_draws, tr("Skip mesh draws that are still building"),
+           tr("Only applies when asynchronous shader building is on. Fewer freezes the first "
+              "time you visit an area (about a third less in Ocarina of Time), but some objects "
+              "can be missing for a moment until their shaders are built. Later visits are not "
+              "affected."));
     INSERT(Settings, native_pipeline_wait_ms, tr("Pipeline wait per frame (ms):"),
            tr("Used by the Bounded mode: the most time per frame that Switch 2 draws and compute "
               "passes may wait in total for pipelines that are still building. Once spent, the "
@@ -746,6 +755,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                           {
                               PAIR(OotAntiAliasing, Game, tr("Game")),
                               PAIR(OotAntiAliasing, NoSharpening, tr("No sharpening")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::OcarinaShadowSize>::Index(),
+                          {
+                              PAIR(OcarinaShadowSize, Full, tr("Full (12288x12288)")),
+                              PAIR(OcarinaShadowSize, Half, tr("Half (6144x6144)")),
+                              PAIR(OcarinaShadowSize, Quarter, tr("Quarter (3072x3072)")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::HdrMode>::Index(),
                           {

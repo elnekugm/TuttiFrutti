@@ -2647,7 +2647,7 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
     // A native draw counts as depth-tested only when it also writes color into a render target 0
     // first written in an earlier frame, which the title redraws every frame: Mario Kart World
     // bakes terrain once with depth-tested draws (b7980efd7), and a bound depth buffer alone
-    // doesn't test (Eglantine #874). Mesh draws always wait.
+    // doesn't test (Eglantine #874). Mesh draws always wait, unless their own setting skips them.
     const bool depth_tested =
         native ? mode != NativePendingMode::Wait && regs.zeta_enable != 0 &&
                      regs.depth_test_enable != 0 && !regs.IsMeshEnabled() &&
@@ -2679,6 +2679,15 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
             discard = true;
             break;
         }
+        }
+    }
+    if (native && regs.IsMeshEnabled() && Settings::values.skip_unbuilt_mesh_draws.GetValue()) {
+        // Unbuilt task/mesh pipelines skip their draws in every native mode, Wait included.
+        discard = true;
+        static std::atomic<u64> mesh_skipped{};
+        if ((mesh_skipped.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
+            LOG_INFO(Render_Vulkan, "Async shaders: {} mesh pipeline lookups skipped",
+                     mesh_skipped.load(std::memory_order_relaxed));
         }
     }
     if (discard) {
