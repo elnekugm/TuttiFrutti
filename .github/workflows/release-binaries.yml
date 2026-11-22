@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag and build version
         type: string
-        default: build-1.3
+        default: build-1.4
       publish_release:
         description: Publish the packages as a GitHub release
         type: boolean
@@ -638,23 +638,33 @@ jobs:
           cat > notes.md <<EOF
           TuttiFrutti ${tag}, built automatically from ${GITHUB_SHA}.
 
-          **What's new in 1.3**
-          - Cached shaders are compiled on the loading screen before the game starts by default,
-            so shaders you have already run no longer compile at their first draw while playing.
-            The loading screen shows the progress and has a Skip button.
-          - Shaders compile asynchronously by default: a new pipeline costs a brief pop-in instead
-            of a freeze. Switch 2 compute dispatches whose outputs the GPU already wrote are
-            skipped too.
-          - Fast draws keep more state out of the breaks (counter resets, render enable, report
-            operands, MME addresses), and the port's corrupted dialogue text and save thumbnails
-            in Ocarina of Time are fixed.
-          - Shader lowering: IMAD with a negated addend, NVN2 constant banks 25-31, uniform
-            handles for TLD.B.LL and TXQ, register-handle SUATOM/SURED/SULD/SUST,
-            USHF.L.U64.HI, REDUX.AND, LDG.STRONG.GPU, and the output stage buffer read-back
-            (Switch Sports Resort's black water).
-          - The slope depth bias is scaled to guest pixels on rescaled targets.
-          - The Windows profile-guided optimization profile is retrained on 1.3, and this release
-            adds AMD Zen 4 and Zen 5 packages beside x86-64-v3 and Zen 3.
+          **What's new in 1.4**
+          - **Precompile All Shaders, per game.** A game's context menu builds that game's shaders
+            once on the loading screen: the compute programs read from your own game files, plus
+            every pipeline your earlier sessions recorded for that title. It covers about 95% of
+            Ocarina of Time's compute keys, and Kirby Air Riders' compute programs now come from its
+            asset packs. The loading screen shows the progress, has a Skip button and resumes where
+            it left off.
+          - **Fewer crashes and hangs.** Ocarina of Time no longer hangs on interleaved GPU command
+            lists. Ori and the Will of the Wisps replaces its ghost files on Windows. Final Fantasy
+            Resonance loses its black bands on GPUs without 24-bit depth. Ocarina of Time stops
+            sampling the wrong textures while Switch Sports Resort keeps its scenery. Large ASTC
+            texture arrays decode in batches instead of spiking RAM by gigabytes. Windows fastmem
+            protections survive partial unmaps, and unmapped-write logging is throttled.
+          - **Faster.** Pipeline builders use every core (two on old AMD drivers, whose compiler
+            needs the RAM). The GPU front sleeps instead of spinning while it waits. The Windows
+            memory-commit query is cheaper. Fast draws survive vertex stream stride, enable and
+            divisor changes. The default video memory budget stays under 5 GiB, with a texture
+            thrash guard.
+          - **Less stutter.** Driver shader blobs are reused within a session, the status bar shows
+            how many shader builds are left, and the shader cache log is read in chunks.
+          - **Interface.** Frutiger Aero themes, a RAM/VRAM overlay that names the active upscaler,
+            the Switch 2 home view with banner artwork, controller navigation in dialogs, and a
+            faster game library refresh.
+          - Ocarina of Time gets a local shadow atlas size setting; Super Mario Bros. Wonder
+            (Switch 2 Edition) gets its built-in 60 FPS patch.
+          - Optional: EDEN_NX2_GPU_WATCHDOG=<seconds> writes a clear log line and exits when the
+            GPU stops making progress, instead of leaving a frozen window. Off by default.
 
           All eight packages are Release builds with profile-guided optimization (PGO use) and
           ThinLTO. They contain only the emulator, its runtime libraries and resources, the licence
