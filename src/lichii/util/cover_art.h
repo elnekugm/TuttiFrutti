@@ -26,11 +26,12 @@ struct Result {
     std::string detail;
 };
 
-/// Downloads a game's cover (saved square, 512 pixels) and its wide banner (up to 1920x1080) into
-/// the files QtCommon::Game::DownloadedCoverPath and DownloadedBannerPath name. Switch games are
-/// looked up on api.nlib.cc by program ID. Switch 2 games, and Switch games nlib.cc does not have,
-/// are looked up by title in Nintendo's eShop search (searching.nintendo-europe.com), among games
-/// of the same console, and only an exact or near-exact name match is taken. The images are
+/// Downloads a game's cover (square, up to 1024 pixels) and its wide banner (up to 2560x1440) into
+/// the files QtCommon::Game::DownloadedCoverPath and DownloadedBannerPath name. First from the
+/// LaunchBox Games Database by title (its "Square" picture and its background fanart, full size);
+/// what it lacks from api.nlib.cc by program ID (Switch games), then from Nintendo's eShop search
+/// (searching.nintendo-europe.com) by title. The title searches stay on the same console and take
+/// only an exact or near-exact name match. The images are
 /// decoded and encoded again before they are saved, so only valid pictures land on disk. A game
 /// neither service knows gets a marker file so it is not asked again (see NoCoverMarkerPath).
 /// Blocking: run it off the UI thread. It stops as soon as cancel is set.

@@ -17,6 +17,7 @@
 #include <QByteArray>
 #include <QFile>
 #include <QImage>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QString>
 #include <QUrl>
@@ -40,11 +41,19 @@ constexpr std::string_view EshopSearchOrigin = "https://searching.nintendo-europ
 /// Where the eShop search's pictures are; no other host is fetched from its results.
 constexpr std::string_view EshopImageOrigin = "https://www.nintendo.com";
 
-constexpr std::size_t MaxImageBytes = 8 * 1024 * 1024;
+// The LaunchBox Games Database: community artwork, its "Square" and "Fanart - Background" types.
+constexpr std::string_view LaunchBoxOrigin = "https://gamesdb.launchbox-app.com";
+constexpr std::string_view LaunchBoxImageOrigin = "https://images.launchbox-app.com";
+// Its search and image pages are HTML, 100-300 KiB.
+constexpr std::size_t MaxPageBytes = 2 * 1024 * 1024;
+// LaunchBox fanart is often a large PNG.
+constexpr std::size_t MaxImageBytes = 24 * 1024 * 1024;
 constexpr std::size_t MaxSearchBytes = 512 * 1024;
-constexpr int CoverSide = 512; // The library shows covers at up to 512 pixels.
-constexpr int BannerWidth = 1920;
-constexpr int BannerHeight = 1080;
+// The home view shows covers at up to 440 logical pixels, ~900 on a high-DPI screen.
+constexpr int CoverSide = 1024;
+// The loading screen fills the window with the banner: kept up to 1440p so it stays sharp there.
+constexpr int BannerWidth = 2560;
+constexpr int BannerHeight = 1440;
 
 enum class Fetch { Ok, NotFound, NetworkError, Cancelled };
 
@@ -115,20 +124,23 @@ Fetch GetImage(std::string_view origin, const std::string& path, const std::atom
     return Fetch::Ok;
 }
 
-bool SaveJpeg(const std::filesystem::path& path, const QImage& image) {
+bool SaveJpeg(const std::filesystem::path& path, const QImage& image, int quality = 90) {
     if (!Common::FS::CreateDirs(path.parent_path())) {
         return false;
     }
     // Written to a temporary file and swapped in, so a failed save never leaves a broken image.
     QSaveFile file(QString::fromStdString(Common::FS::PathToUTF8String(path)));
     return file.open(QIODevice::WriteOnly) &&
-           image.convertToFormat(QImage::Format_RGB888).save(&file, "JPG", 90) && file.commit();
+           image.convertToFormat(QImage::Format_RGB888).save(&file, "JPG", quality) &&
+           file.commit();
 }
 
 bool SaveCover(u64 program_id, const QImage& cover) {
-    return SaveJpeg(
-        QtCommon::Game::DownloadedCoverPath(program_id),
-        cover.scaled(CoverSide, CoverSide, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+    // Square, never enlarged: an upscaled picture only looks blurrier on a big card.
+    const int side = std::min(CoverSide, std::max(cover.width(), cover.height()));
+    return SaveJpeg(QtCommon::Game::DownloadedCoverPath(program_id),
+                    cover.scaled(side, side, Qt::IgnoreAspectRatio, Qt::SmoothTransformation),
+                    94);
 }
 
 bool SaveBanner(u64 program_id, const QImage& banner) {
@@ -136,7 +148,7 @@ bool SaveBanner(u64 program_id, const QImage& banner) {
                             ? banner.scaled(BannerWidth, BannerHeight, Qt::KeepAspectRatio,
                                             Qt::SmoothTransformation)
                             : banner;
-    return SaveJpeg(QtCommon::Game::DownloadedBannerPath(program_id), wide);
+    return SaveJpeg(QtCommon::Game::DownloadedBannerPath(program_id), wide, 92);
 }
 
 void TouchMarker(u64 program_id) {
@@ -155,7 +167,7 @@ bool IsSwitch2(u64 program_id) {
 }
 
 /// Lower case letters and digits only, accents and trademark signs dropped, so that
-/// "PokÃ©monâ„¢ Pokopia" and "Pokemon Pokopia" compare equal.
+/// "Pokémon™ Pokopia" and "Pokemon Pokopia" compare equal.
 QString Normalize(const QString& title) {
     QString text = title;
     text.remove(QChar(0x2122)).remove(QChar(0x00AE)).remove(QChar(0x00A9));
@@ -187,11 +199,17 @@ int MatchScore(const QString& wanted, const QString& candidate) {
     return 0;
 }
 
-/// The eShop's "500w" picture in another width, or the same URL when it has no width.
+/// The eShop's "500w" picture in another width, or the same URL when it has no width. "full" is
+/// the picture as uploaded (the name without "_image500w"; 1080x1080 for square covers).
 std::string ResizedImageUrl(const std::string& url, std::string_view width) {
     std::string out = url;
     if (const auto at = out.rfind("image500w"); at != std::string::npos) {
-        out.replace(at + 5, 4, width);
+        if (width == "full") {
+            const auto start = at > 0 && out[at - 1] == '_' ? at - 1 : at;
+            out.erase(start, at + 9 - start);
+        } else {
+            out.replace(at + 5, 4, width);
+        }
     }
     return out;
 }
@@ -288,20 +306,174 @@ std::optional<EshopArt> FindEshopArt(u64 program_id, const std::string& title,
     return best;
 }
 
-/// GETs an eShop picture, first in the given larger width, then as listed.
-Fetch GetEshopImage(const std::string& url, std::string_view larger_width,
+QString HtmlText(QString text) {
+    text.replace(QStringLiteral("&amp;"), QStringLiteral("&"))
+        .replace(QStringLiteral("&#39;"), QStringLiteral("'"))
+        .replace(QStringLiteral("&#x27;"), QStringLiteral("'"))
+        .replace(QStringLiteral("&quot;"), QStringLiteral("\""))
+        .replace(QStringLiteral("&lt;"), QStringLiteral("<"))
+        .replace(QStringLiteral("&gt;"), QStringLiteral(">"));
+    return text.trimmed();
+}
+
+/// Cuts a "Nintendo Switch 2 Edition" suffix off a name ("The Legend of Zelda: Breath of the
+/// Wild: Nintendo Switch 2 Edition", "Kirby and the Forgotten Land: Nintendo Switch 2 Edition +
+/// Star-Crossed World") and says whether there was one.
+bool StripSwitch2Edition(QString& title) {
+    static const QRegularExpression edition_re(
+        QStringLiteral(R"re(\s*[:\-\x{2013}\x{2014}]?\s*Nintendo\s+Switch\s*2\s+Edition\b.*$)re"),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto match = edition_re.match(title);
+    if (!match.hasMatch()) {
+        return false;
+    }
+    title.truncate(match.capturedStart());
+    return true;
+}
+
+struct LaunchBoxArt {
+    /// Paths on LaunchBoxImageOrigin, full size.
+    std::string square;
+    std::string fanart;
+};
+
+/// Finds the game by name in the LaunchBox Games Database and picks its largest "Square" and
+/// "Fanart - Background" pictures, preferring the world, American and European releases. Of the
+/// entries with the game's name, its Nintendo Switch 2 Edition wins (LaunchBox lists those as
+/// their own Switch 2 games), then any other Switch 2 entry, then the Switch one.
+std::optional<LaunchBoxArt> FindLaunchBoxArt(const std::string& title,
+                                             const std::atomic_bool& cancel, Fetch& fetch,
+                                             std::string& detail) {
+    // The name without an edition suffix: it matches the base game and its Switch 2 Edition.
+    QString base_title = QString::fromStdString(title);
+    StripSwitch2Edition(base_title);
+    const QString wanted = Normalize(base_title);
+    QString query = base_title;
+    query.remove(QChar(0x2122)).remove(QChar(0x00AE)).remove(QChar(0x00A9));
+    for (const QChar c : QStringLiteral("/\\?#%&:")) {
+        query.replace(c, QLatin1Char(' '));
+    }
+    query = query.simplified().toLower();
+    if (wanted.isEmpty() || query.isEmpty()) {
+        fetch = Fetch::NotFound;
+        return std::nullopt;
+    }
+
+    std::string body;
+    fetch = Get(LaunchBoxOrigin, "/games/results/" + QUrl::toPercentEncoding(query).toStdString(),
+                MaxPageBytes, cancel, body, detail);
+    if (fetch != Fetch::Ok) {
+        return std::nullopt;
+    }
+
+    // <a ... href="/games/details/423668-mario-kart-world"> ... <h3>Mario Kart World</h3>
+    // <p>Nintendo Switch 2</p>
+    static const QRegularExpression card_re(
+        QStringLiteral(R"re(href="/games/details/(\d+)-[^"]*"[\s\S]{0,2000}?<h3[^>]*>([^<]*)</h3>\s*<p[^>]*>([^<]*)</p>)re"));
+    int best_score = 0;
+    QString best_id;
+    auto cards = card_re.globalMatch(QString::fromStdString(body));
+    while (cards.hasNext()) {
+        const auto card = cards.next();
+        const QString platform = HtmlText(card.captured(3));
+        const bool switch2 = platform == QStringLiteral("Nintendo Switch 2");
+        if (!switch2 && platform != QStringLiteral("Nintendo Switch")) {
+            continue;
+        }
+        QString name = HtmlText(card.captured(2));
+        const bool edition = StripSwitch2Edition(name);
+        const int name_score = MatchScore(wanted, Normalize(name));
+        if (name_score < 2) {
+            continue;
+        }
+        // The Switch 2 Edition first, then Switch 2, then the closer name; the first result
+        // wins a tie (LaunchBox ranks the closest match first).
+        const int score = name_score + (switch2 ? 10 : 0) + (switch2 && edition ? 20 : 0);
+        if (score > best_score) {
+            best_score = score;
+            best_id = card.captured(1);
+        }
+    }
+    if (best_id.isEmpty()) {
+        fetch = Fetch::NotFound;
+        return std::nullopt;
+    }
+
+    fetch = Get(LaunchBoxOrigin, "/games/images/" + best_id.toStdString(), MaxPageBytes, cancel,
+                body, detail);
+    if (fetch != Fetch::Ok) {
+        return std::nullopt;
+    }
+
+    // <a href="https://images.launchbox-app.com/r2_....png" ... data-title="Mario Kart World -
+    // Square Image (Japan)" data-footer="1024 x 1024 PNG, 1.84 MB...">
+    static const QRegularExpression image_re(
+        QStringLiteral(R"re(<a\b[^>]*?href="https://images\.launchbox-app\.com(/[^"]+)"[^>]*?data-title="([^"]*)"[^>]*?data-footer="(\d+) x (\d+))re"));
+    const auto region_rank = [](const QString& type) {
+        static const QStringList preferred{
+            QStringLiteral("(World)"),         QStringLiteral("(North America)"),
+            QStringLiteral("(United States)"), QStringLiteral("(Europe)"),
+            QStringLiteral("(United Kingdom)"),
+        };
+        for (qsizetype i = 0; i < preferred.size(); ++i) {
+            if (type.endsWith(preferred[i])) {
+                return static_cast<int>(i);
+            }
+        }
+        return type.endsWith(QLatin1Char(')')) ? 10 : 5; // No region: about as good as any.
+    };
+    struct Pick {
+        int rank = 1000;
+        qint64 area = 0;
+        std::string path;
+    };
+    Pick square;
+    Pick fanart;
+    const auto consider = [&region_rank](Pick& pick, const QString& type, qint64 area,
+                                         const QString& path) {
+        const int rank = region_rank(type);
+        // A picture under 600 px a side is only taken when there is nothing larger.
+        const int size_penalty = area < 600LL * 600LL ? 100 : 0;
+        if (rank + size_penalty < pick.rank ||
+            (rank + size_penalty == pick.rank && area > pick.area)) {
+            pick = {rank + size_penalty, area, path.toStdString()};
+        }
+    };
+    auto images = image_re.globalMatch(QString::fromStdString(body));
+    while (images.hasNext()) {
+        const auto image = images.next();
+        const QString type = HtmlText(image.captured(2));
+        const qint64 area = image.captured(3).toLongLong() * image.captured(4).toLongLong();
+        if (type.contains(QStringLiteral("- Square Image"))) {
+            consider(square, type, area, image.captured(1));
+        } else if (type.contains(QStringLiteral("- Fanart - Background Image"))) {
+            // Backgrounds carry no text worth a region: the largest one is the sharpest.
+            consider(fanart, QStringLiteral("(World)"), area, image.captured(1));
+        }
+    }
+    if (square.path.empty() && fanart.path.empty()) {
+        fetch = Fetch::NotFound;
+        return std::nullopt;
+    }
+    fetch = Fetch::Ok;
+    return LaunchBoxArt{std::move(square.path), std::move(fanart.path)};
+}
+
+/// GETs an eShop picture, first in the given larger widths in order, then as listed.
+Fetch GetEshopImage(const std::string& url, std::initializer_list<std::string_view> larger_widths,
                     const std::atomic_bool& cancel, QImage& image, std::string& detail) {
     const std::string path = EshopImagePath(url);
     if (path.empty()) {
         return Fetch::NotFound;
     }
-    if (!larger_width.empty()) {
-        const std::string larger = EshopImagePath(ResizedImageUrl(url, larger_width));
-        if (larger != path) {
-            const Fetch fetch = GetImage(EshopImageOrigin, larger, cancel, image, detail);
-            if (fetch != Fetch::NotFound) {
-                return fetch;
-            }
+    for (const std::string_view width : larger_widths) {
+        const std::string larger = EshopImagePath(ResizedImageUrl(url, width));
+        if (larger.empty() || larger == path) {
+            continue;
+        }
+        const Fetch fetch = GetImage(EshopImageOrigin, larger, cancel, image, detail);
+        if (fetch != Fetch::NotFound) {
+            return fetch;
         }
     }
     return GetImage(EshopImageOrigin, path, cancel, image, detail);
@@ -330,31 +502,66 @@ Result Download(u64 program_id, const std::string& title, const std::atomic_bool
         return false;
     };
 
-    // 1. nlib.cc by title ID: Switch games only.
-    if (!IsSwitch2(program_id)) {
-        const std::string id = fmt::format("{:016X}", program_id);
-        QImage cover;
-        if (settle(GetImage(NlibOrigin, fmt::format("/nx/{}/icon", id), cancel, cover,
-                            result.detail))) {
+    const bool has_name = !Normalize(QString::fromStdString(title)).isEmpty();
+
+    // 1. The LaunchBox Games Database by name: its "Square" picture for the cover and its
+    // background fanart for the banner, both full size.
+    if (has_name) {
+        Fetch search = Fetch::NotFound;
+        const auto art = FindLaunchBoxArt(title, cancel, search, result.detail);
+        if (settle(search)) {
             return result;
         }
-        if (!cover.isNull()) {
-            result.cover_saved = SaveCover(program_id, cover);
+        if (art && !art->square.empty()) {
+            QImage cover;
+            if (settle(GetImage(LaunchBoxImageOrigin, art->square, cancel, cover,
+                                result.detail))) {
+                return result;
+            }
+            if (!cover.isNull()) {
+                result.cover_saved = SaveCover(program_id, cover);
+            }
         }
-        QImage banner;
-        if (settle(GetImage(NlibOrigin, fmt::format("/nx/{}/banner", id), cancel, banner,
-                            result.detail))) {
-            return result;
-        }
-        if (!banner.isNull()) {
-            result.banner_saved = SaveBanner(program_id, banner);
+        if (art && !art->fanart.empty()) {
+            QImage banner;
+            if (settle(GetImage(LaunchBoxImageOrigin, art->fanart, cancel, banner,
+                                result.detail))) {
+                return result;
+            }
+            if (!banner.isNull()) {
+                result.banner_saved = SaveBanner(program_id, banner);
+            }
         }
     }
 
-    // 2. Nintendo's eShop search by name: Switch 2 games, and what nlib.cc does not have. A game
+    // 2. nlib.cc by title ID: Switch games only, for what LaunchBox does not have.
+    if (!IsSwitch2(program_id) && (!result.cover_saved || !result.banner_saved)) {
+        const std::string id = fmt::format("{:016X}", program_id);
+        if (!result.cover_saved) {
+            QImage cover;
+            if (settle(GetImage(NlibOrigin, fmt::format("/nx/{}/icon", id), cancel, cover,
+                                result.detail))) {
+                return result;
+            }
+            if (!cover.isNull()) {
+                result.cover_saved = SaveCover(program_id, cover);
+            }
+        }
+        if (!result.banner_saved) {
+            QImage banner;
+            if (settle(GetImage(NlibOrigin, fmt::format("/nx/{}/banner", id), cancel, banner,
+                                result.detail))) {
+                return result;
+            }
+            if (!banner.isNull()) {
+                result.banner_saved = SaveBanner(program_id, banner);
+            }
+        }
+    }
+
+    // 3. Nintendo's eShop search by name: what neither LaunchBox nor nlib.cc has. A game
     // without a readable name (missing keys, say) is not searched, and not marked either: it is
     // tried again once its name can be read.
-    const bool has_name = !Normalize(QString::fromStdString(title)).isEmpty();
     if (has_name && (!result.cover_saved || !result.banner_saved)) {
         Fetch search = Fetch::NotFound;
         const auto art = FindEshopArt(program_id, title, cancel, search, result.detail);
@@ -363,7 +570,10 @@ Result Download(u64 program_id, const std::string& title, const std::atomic_bool
         }
         if (art && !result.cover_saved && !art->square.empty()) {
             QImage cover;
-            if (settle(GetEshopImage(art->square, {}, cancel, cover, result.detail))) {
+            // The listed square picture is 500 pixels wide: the full one (1080) or the 950 one is
+            // sharp on a big card.
+            if (settle(GetEshopImage(art->square, {"full", "950w"}, cancel, cover,
+                                     result.detail))) {
                 return result;
             }
             if (!cover.isNull()) {
@@ -372,7 +582,7 @@ Result Download(u64 program_id, const std::string& title, const std::atomic_bool
         }
         if (art && !result.banner_saved && !art->wide.empty()) {
             QImage banner;
-            if (settle(GetEshopImage(art->wide, "1600w", cancel, banner, result.detail))) {
+            if (settle(GetEshopImage(art->wide, {"1600w"}, cancel, banner, result.detail))) {
                 return result;
             }
             if (!banner.isNull()) {
