@@ -14,6 +14,8 @@ inline constexpr u64 MarioKartWorldProgramId = 0x0400C3F00006E000ULL;
 // vertex lighting lives in images the collector used to drop (EDEN_NX2_SSBO_WRITTEN_SIZE_WORD and
 // EDEN_NX2_TC_KEEP_NEWEST, both on for it by default).
 inline constexpr u64 KirbyAirRidersProgramId = 0x040077201BE50000ULL;
+// The online test build: the same game code, and the same pool and baked-lighting rules.
+inline constexpr u64 KirbyAirRidersTestRideProgramId = 0x04005B902517C000ULL;
 inline constexpr u64 HyruleWarriorsProgramId = 0x04003F40232DE000ULL;
 inline constexpr u64 DonkeyKongBananzaProgramId = 0x040074A01BF12000ULL;
 

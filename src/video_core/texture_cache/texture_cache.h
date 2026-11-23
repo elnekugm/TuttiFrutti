@@ -1639,7 +1639,7 @@ bool TextureCache<P>::IsNewestWritten(const ImageBase& image) {
     // image on that memory is kept. Ported from Satsuma (FilDev, GPL-3.0).
     static const Common::Nx2::GameSwitch keep_newest{
         "EDEN_NX2_TC_KEEP_NEWEST",
-        [](u64 program_id) { return program_id == Settings::KirbyAirRidersProgramId; }};
+        Common::Nx2::OnForKirbyAirRiders};
     if (!keep_newest.Enabled() || False(image.flags & ImageFlagBits::GpuModified)) {
         return false;
     }

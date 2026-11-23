@@ -4408,7 +4408,7 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
     // game only: the write mark of such a binding grows with it. Ported from Satsuma (FilDev).
     static const Common::Nx2::GameSwitch written_size_word{
         "EDEN_NX2_SSBO_WRITTEN_SIZE_WORD",
-        [](u64 program_id) { return program_id == Settings::KirbyAirRidersProgramId; }};
+        Common::Nx2::OnForKirbyAirRiders};
     const bool written_size = written_size_word.Enabled() && native_pointer && compute &&
                               is_written && !table_pointer;
     const bool reads_size_word =

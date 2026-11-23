@@ -11,6 +11,7 @@
 
 #include "common/common_types.h"
 #include "common/game_presets.h"
+#include "common/logging.h"
 #include "common/settings.h"
 
 /// A workaround or optimisation that is on for the titles it was written for, and that a player can
@@ -37,6 +38,12 @@ using SwitchDefault = bool (*)(u64 program_id);
     return program_id == title_id;
 }
 
+/// Kirby Air Riders and its online test build (the same game code).
+[[nodiscard]] inline bool OnForKirbyAirRiders(u64 program_id) {
+    return program_id == Settings::KirbyAirRidersProgramId ||
+           program_id == Settings::KirbyAirRidersTestRideProgramId;
+}
+
 class GameSwitch {
 public:
     constexpr explicit GameSwitch(std::string_view name_, SwitchDefault default_ = OffForAll)
@@ -52,6 +59,8 @@ public:
         const bool value = Read(program_id);
         cached_value.store(value, std::memory_order_relaxed);
         cached_program_id.store(program_id, std::memory_order_release);
+        // One line per title and switch, so a bug report names the workarounds that were on.
+        LOG_INFO(Common, "Switch {} for {:016X}: {}", name, program_id, value ? "on" : "off");
         return value;
     }
 
