@@ -161,6 +161,10 @@ inline void NoteSync() {
 [[nodiscard]] inline u64 SyncSerial() {
     t_reads_sync_serial = true;
     t_sync_serial_bumped = false;
+    // It reads the memory serial, so this thread is one of the readers Break() and NoteSync()
+    // track: from its next bump on they skip the locked add, as the drawing thread's do.
+    t_reads_serials = true;
+    t_memory_serial_bumped = false;
     return g_memory_serial.load(std::memory_order_acquire);
 }
 

@@ -22,6 +22,8 @@
 
 #include "common/host_memory.h"
 #include "common/literals.h"
+#include "common/scope_exit.h"
+#include "common/settings.h"
 
 using Common::HostMemory;
 using namespace Common::Literals;
@@ -341,10 +343,15 @@ TEST_CASE("HostMemory: Partial unmap preserves the protections of both kept piec
 #endif
 
 #ifdef _WIN32
-// Pre-existing order-sensitive failure: after a full-suite run the host-memory implementation can
-// be file-backed, where TrimZeroPages reports nothing to trim. Passes alone and with [common];
-// [!mayfail] keeps the suite green while that leak is tracked.
-TEST_CASE("HostMemory: Trim zero pages keeps contents", "[common][!mayfail]") {
+TEST_CASE("HostMemory: Trim zero pages keeps contents", "[common]") {
+    // A file-backed section reports nothing to trim (its cleared pages would become disk writes),
+    // and whether one is made depends on the dynamic-memory setting and the host's RAM: pin the
+    // committed backing this test checks, whatever an earlier test left.
+    const bool dynamic_memory = Settings::values.nx2_dynamic_memory.GetValue();
+    Settings::values.nx2_dynamic_memory.SetValue(false);
+    SCOPE_EXIT {
+        Settings::values.nx2_dynamic_memory.SetValue(dynamic_memory);
+    };
     constexpr size_t Page = 0x1000;
     HostMemory mem(BACKING_SIZE, VIRTUAL_SIZE);
     REQUIRE(mem.BackingBasePointer() != nullptr);
