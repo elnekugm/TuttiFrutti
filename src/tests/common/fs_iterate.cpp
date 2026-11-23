@@ -27,7 +27,7 @@ struct TempTree {
 TEST_CASE("Directory walks stop once the callback asks to", "[fs]") {
     const TempTree tree;
     int visited = 0;
-    const Common::FS::DirEntryCallable stop = [&](const std::filesystem::directory_entry&) {
+    const Common::FS::DirEntryCallable stop = [&](const std::filesystem::path&, size_t) {
         ++visited;
         return false;
     };
@@ -41,7 +41,7 @@ TEST_CASE("Directory walks stop once the callback asks to", "[fs]") {
 TEST_CASE("Directory walks visit every entry while the callback continues", "[fs]") {
     const TempTree tree;
     int visited = 0;
-    const Common::FS::DirEntryCallable count = [&](const std::filesystem::directory_entry&) {
+    const Common::FS::DirEntryCallable count = [&](const std::filesystem::path&, size_t) {
         ++visited;
         return true;
     };

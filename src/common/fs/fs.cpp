@@ -68,7 +68,7 @@ bool RemoveFile(const fs::path& path, std::error_code& ec) {
         return false;
     }
 
-    const auto status = fs::status(path, ec);
+    const auto status = fs::status(ExtendWin32Path(path), ec);
     if (status.type() == fs::file_type::not_found) {
         ec.clear();
         LOG_DEBUG(Common_Filesystem, "Filesystem object at path={} does not exist",
@@ -89,7 +89,7 @@ bool RemoveFile(const fs::path& path, std::error_code& ec) {
         return false;
     }
 
-    fs::remove(path, ec);
+    fs::remove(ExtendWin32Path(path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem, "Failed to remove the file at path={}, ec_message={}",
@@ -131,7 +131,7 @@ bool RenameFile(const fs::path& old_path, const fs::path& new_path) {
 
     std::error_code ec;
 
-    fs::rename(old_path, new_path, ec);
+    fs::rename(ExtendWin32Path(old_path), ExtendWin32Path(new_path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem,
@@ -201,7 +201,7 @@ bool CreateDir(const fs::path& path) {
 
     std::error_code ec;
 
-    fs::create_directory(path, ec);
+    fs::create_directory(ExtendWin32Path(path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem, "Failed to create the directory at path={}, ec_message={}",
@@ -229,7 +229,7 @@ bool CreateDirs(const fs::path& path) {
 
     std::error_code ec;
 
-    fs::create_directories(path, ec);
+    fs::create_directories(ExtendWin32Path(path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem, "Failed to create the directories at path={}, ec_message={}",
@@ -271,7 +271,7 @@ bool RemoveDir(const fs::path& path) {
 
     std::error_code ec;
 
-    fs::remove(path, ec);
+    fs::remove(ExtendWin32Path(path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem, "Failed to remove the directory at path={}, ec_message={}",
@@ -305,7 +305,7 @@ bool RemoveDirRecursively(const fs::path& path) {
 
     std::error_code ec;
 
-    fs::remove_all(path, ec);
+    fs::remove_all(ExtendWin32Path(path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem,
@@ -341,7 +341,7 @@ bool RemoveDirContentsRecursively(const fs::path& path) {
     std::error_code ec;
 
     // TODO (Morph): Replace this with recursive_directory_iterator once it's fixed in MSVC.
-    for (const auto& entry : fs::directory_iterator(path, ec)) {
+    for (const auto& entry : fs::directory_iterator(ExtendWin32Path(path), ec)) {
         if (ec) {
             LOG_ERROR(Common_Filesystem,
                       "Failed to completely enumerate the directory at path={}, ec_message={}",
@@ -349,7 +349,7 @@ bool RemoveDirContentsRecursively(const fs::path& path) {
             break;
         }
 
-        fs::remove(entry.path(), ec);
+        fs::remove(ExtendWin32Path(entry.path()), ec);
 
         if (ec) {
             LOG_ERROR(Common_Filesystem,
@@ -407,7 +407,7 @@ bool RenameDir(const fs::path& old_path, const fs::path& new_path) {
 
     std::error_code ec;
 
-    fs::rename(old_path, new_path, ec);
+    fs::rename(ExtendWin32Path(old_path), ExtendWin32Path(new_path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem,
@@ -421,6 +421,21 @@ bool RenameDir(const fs::path& old_path, const fs::path& new_path) {
 
     return true;
 }
+
+namespace {
+// The entry's path with the directory the caller iterated as its base. The iteration itself may
+// use the extended `\\?\` form for a path past MAX_PATH, and no caller should see that form: it
+// would become a file's identity in the VFS, whose string operations differ by the prefix.
+std::filesystem::path EntryPathFor(const std::filesystem::path& base,
+                                   const std::filesystem::path& extended_base,
+                                   const std::filesystem::directory_entry& entry) {
+    const std::filesystem::path relative{entry.path().lexically_relative(extended_base)};
+    if (relative.empty() || *relative.begin() == std::filesystem::path{".."}) {
+        return base / entry.path().filename();
+    }
+    return base / relative;
+}
+} // Anonymous namespace
 
 void IterateDirEntries(const std::filesystem::path& path, const DirEntryCallable& callback, DirEntryFilter filter) {
     if (!ValidatePath(path)) {
@@ -438,14 +453,17 @@ void IterateDirEntries(const std::filesystem::path& path, const DirEntryCallable
 
     std::error_code ec;
     bool callback_error = false;
+    const std::filesystem::path extended{ExtendWin32Path(path)};
     // Range-for and status() use the throwing overloads, and nothing above the callers catches a
     // filesystem_error (the game list worker runs on a thread pool thread), so step with ec.
-    for (fs::directory_iterator it(path, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+    for (fs::directory_iterator it(extended, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
         std::error_code status_ec;
         const auto type = it->status(status_ec).type();
         if ((True(filter & DirEntryFilter::File) && type == fs::file_type::regular)
         || (True(filter & DirEntryFilter::Directory) && type == fs::file_type::directory)) {
-            if (!callback(*it)) {
+            const size_t size{
+                type == fs::file_type::regular ? static_cast<size_t>(it->file_size()) : 0};
+            if (!callback(EntryPathFor(path, extended, *it), size)) {
                 // The callback asks to stop (e.g. the game list worker is being stopped).
                 callback_error = true;
                 break;
@@ -476,15 +494,18 @@ void IterateDirEntriesRecursively(const std::filesystem::path& path, const DirEn
 
     std::error_code ec;
     bool callback_error = false;
+    const std::filesystem::path extended{ExtendWin32Path(path)};
     // MSVC should now be fixed... right... right?!?!?!
     // Skip directories we may not open (C:\System Volume Information and the like) instead of
     // throwing from the range-for increment when the iterator descends into one.
-    for (fs::recursive_directory_iterator it(path, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+    for (fs::recursive_directory_iterator it(extended, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
         std::error_code status_ec;
         const auto type = it->status(status_ec).type();
         if ((True(filter & DirEntryFilter::File) && type == fs::file_type::regular)
         || (True(filter & DirEntryFilter::Directory) && type == fs::file_type::directory)) {
-            if (!callback(*it)) {
+            const size_t size{
+                type == fs::file_type::regular ? static_cast<size_t>(it->file_size()) : 0};
+            if (!callback(EntryPathFor(path, extended, *it), size)) {
                 // The callback asks to stop (e.g. the game list worker is being stopped).
                 callback_error = true;
                 break;
@@ -506,10 +527,10 @@ bool Exists(const fs::path& path) {
     if (Android::IsContentUri(path)) {
         return Android::Exists(path);
     } else {
-        return fs::exists(path, ec);
+        return fs::exists(ExtendWin32Path(path), ec);
     }
 #else
-    return fs::exists(path, ec);
+    return fs::exists(ExtendWin32Path(path), ec);
 #endif
 }
 
@@ -519,10 +540,10 @@ bool IsFile(const fs::path& path) {
     if (Android::IsContentUri(path)) {
         return !Android::IsDirectory(path);
     } else {
-        return fs::is_regular_file(path, ec);
+        return fs::is_regular_file(ExtendWin32Path(path), ec);
     }
 #else
-    return fs::is_regular_file(path, ec);
+    return fs::is_regular_file(ExtendWin32Path(path), ec);
 #endif
 }
 
@@ -532,10 +553,10 @@ bool IsDir(const fs::path& path) {
     if (Android::IsContentUri(path)) {
         return Android::IsDirectory(path);
     } else {
-        return fs::is_directory(path, ec);
+        return fs::is_directory(ExtendWin32Path(path), ec);
     }
 #else
-    return fs::is_directory(path, ec);
+    return fs::is_directory(ExtendWin32Path(path), ec);
 #endif
 }
 
@@ -555,7 +576,7 @@ fs::path GetCurrentDir() {
 bool SetCurrentDir(const fs::path& path) {
     std::error_code ec;
 
-    fs::current_path(path, ec);
+    fs::current_path(ExtendWin32Path(path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem, "Failed to set the current path to path={}, ec_message={}",
@@ -569,7 +590,7 @@ bool SetCurrentDir(const fs::path& path) {
 fs::file_type GetEntryType(const fs::path& path) {
     std::error_code ec;
 
-    const auto file_status = fs::status(path, ec);
+    const auto file_status = fs::status(ExtendWin32Path(path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem, "Failed to retrieve the entry type of path={}, ec_message={}",
@@ -589,7 +610,7 @@ u64 GetSize(const fs::path& path) {
 
     std::error_code ec;
 
-    const auto file_size = fs::file_size(path, ec);
+    const auto file_size = fs::file_size(ExtendWin32Path(path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem, "Failed to retrieve the file size of path={}, ec_message={}",
@@ -603,7 +624,7 @@ u64 GetSize(const fs::path& path) {
 u64 GetFreeSpaceSize(const fs::path& path) {
     std::error_code ec;
 
-    const auto space_info = fs::space(path, ec);
+    const auto space_info = fs::space(ExtendWin32Path(path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem,
@@ -618,7 +639,7 @@ u64 GetFreeSpaceSize(const fs::path& path) {
 u64 GetTotalSpaceSize(const fs::path& path) {
     std::error_code ec;
 
-    const auto space_info = fs::space(path, ec);
+    const auto space_info = fs::space(ExtendWin32Path(path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem,

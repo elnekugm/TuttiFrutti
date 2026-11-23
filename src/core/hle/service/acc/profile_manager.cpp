@@ -552,8 +552,9 @@ std::vector<std::string> ProfileManager::FindOrphanedProfiles()
 
     Common::FS::IterateDirEntries(
         path,
-        [&good_uuids, &orphaned_profiles](const std::filesystem::directory_entry& entry) -> bool {
-            const std::string uuid = entry.path().filename().string();
+        [&good_uuids, &orphaned_profiles](const std::filesystem::path& entry_path,
+                                          size_t) -> bool {
+            const std::string uuid = entry_path.filename().string();
 
             // Only a user ID names a profile folder here. Anything else, such as a title folder
             // copied in by hand, is neither reported nor removed.
@@ -564,7 +565,7 @@ std::vector<std::string> ProfileManager::FindOrphanedProfiles()
                 // Most often a title's save folder copied in one level too high: say where it is,
                 // as the game won't find it there.
                 LOG_WARNING(Service_ACC, "Ignoring {} in the user saves: not a user ID folder",
-                            Common::FS::PathToUTF8String(entry.path()));
+                            Common::FS::PathToUTF8String(entry_path));
                 return true;
             }
 
@@ -572,9 +573,9 @@ std::vector<std::string> ProfileManager::FindOrphanedProfiles()
 
             // first off, we should always clear empty profiles
             // 99% of the time these are useless. If not, they are recreated anyways...
-            const auto is_empty = [&entry, &override]() -> bool {
+            const auto is_empty = [&entry_path, &override]() -> bool {
                 try {
-                    for (const auto& file : fs::recursive_directory_iterator(entry.path())) {
+                    for (const auto& file : fs::recursive_directory_iterator(entry_path)) {
                         // TODO: .yuzu_save_size is a weird file that gets created by certain games
                         // I have no idea what its purpose is, but TEMPORARY SOLUTION: just mark the profile as valid if
                         // this file exists (???) e.g. for SSBU
@@ -597,10 +598,10 @@ std::vector<std::string> ProfileManager::FindOrphanedProfiles()
 
             if (is_empty) {
                 std::error_code error;
-                fs::remove_all(entry, error);
+                fs::remove_all(entry_path, error);
                 if (error) {
                     LOG_WARNING(Service_ACC, "Could not remove the empty profile folder {}: {}",
-                                Common::FS::PathToUTF8String(entry.path()), error.message());
+                                Common::FS::PathToUTF8String(entry_path), error.message());
                 }
                 return true;
             }

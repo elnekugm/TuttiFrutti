@@ -82,6 +82,14 @@ enum EmuPath {
  */
 [[nodiscard]] bool ValidatePath(const std::filesystem::path& path);
 
+/// The path a Win32 filesystem call needs to accept one past MAX_PATH: a fully-qualified path with
+/// `\\?\` before it (`\\?\UNC\server\share` for a network path, and forward slashes turned into
+/// backslashes, which the prefix requires). The filesystem calls in this directory extend their
+/// paths with it, so a profile, save data or game directory deeper than 260 characters works.
+/// Other platforms, a path that already carries it, and a path that cannot be made absolute return
+/// it unchanged.
+[[nodiscard]] std::filesystem::path ExtendWin32Path(const std::filesystem::path& path);
+
 #ifdef _WIN32
 template <typename Path>
 [[nodiscard]] bool ValidatePath(const Path& path) {

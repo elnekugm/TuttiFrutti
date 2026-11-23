@@ -74,9 +74,9 @@ void InstallFirmware(const QString& location, bool recursive) {
 
     std::vector<std::filesystem::path> out;
     const Common::FS::DirEntryCallable dir_callback =
-        [&out](const std::filesystem::directory_entry& entry) {
-            if (entry.path().has_extension() && entry.path().extension() == ".nca") {
-                out.emplace_back(entry.path());
+        [&out](const std::filesystem::path& entry_path, size_t) {
+            if (entry_path.has_extension() && entry_path.extension() == ".nca") {
+                out.emplace_back(entry_path);
             }
 
             return true;

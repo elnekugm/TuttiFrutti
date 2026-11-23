@@ -299,6 +299,7 @@ add_executable(tests
     video_core/indirect_reset.cpp
     video_core/stale_pages.cpp
     input_common/calibration_configuration_job.cpp
+    common/long_paths.cpp
 )
 
 create_target_directory_groups(tests)

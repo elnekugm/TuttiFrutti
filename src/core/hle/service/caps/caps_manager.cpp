@@ -289,7 +289,7 @@ void AlbumManager::FindScreenshots() {
     const auto screenshots_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ScreenshotsDir);
     Common::FS::IterateDirEntries(
         screenshots_dir,
-        [this](const std::filesystem::path& full_path) {
+        [this](const std::filesystem::path& full_path, size_t) {
             AlbumEntry entry;
             if (GetAlbumEntry(entry, full_path).IsError()) {
                 return true;

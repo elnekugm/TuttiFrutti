@@ -472,10 +472,11 @@ std::vector<VirtualFile> RealVfsDirectory::IterateEntries<RealVfsFile, VfsFile>(
     std::vector<VirtualFile> out;
 
     const FS::DirEntryCallable callback = [this,
-                                           &out](const std::filesystem::directory_entry& entry) {
-        const auto full_path_string = FS::PathToUTF8String(entry.path());
+                                           &out](const std::filesystem::path& entry_path,
+                                                 size_t entry_size) {
+        const auto full_path_string = FS::PathToUTF8String(entry_path);
 
-        out.emplace_back(base.OpenFileFromEntry(full_path_string, entry.file_size(), perms));
+        out.emplace_back(base.OpenFileFromEntry(full_path_string, entry_size, perms));
 
         return true;
     };
@@ -494,8 +495,9 @@ std::vector<VirtualDir> RealVfsDirectory::IterateEntries<RealVfsDirectory, VfsDi
     std::vector<VirtualDir> out;
 
     const FS::DirEntryCallable callback = [this,
-                                           &out](const std::filesystem::directory_entry& entry) {
-        const auto full_path_string = FS::PathToUTF8String(entry.path());
+                                           &out](const std::filesystem::path& entry_path,
+                                                 size_t) {
+        const auto full_path_string = FS::PathToUTF8String(entry_path);
 
         out.emplace_back(base.OpenDirectory(full_path_string, perms));
 
@@ -572,7 +574,7 @@ FileTimeStampRaw RealVfsDirectory::GetFileTimeStamp(std::string_view path_) cons
 
 #ifdef _WIN32
     struct _stat64 file_status;
-    const auto stat_result = _wstat64(fs_path.c_str(), &file_status);
+    const auto stat_result = _wstat64(FS::ExtendWin32Path(fs_path).c_str(), &file_status);
 #else
     struct stat file_status;
     const auto stat_result = stat(fs_path.c_str(), &file_status);
@@ -655,10 +657,10 @@ std::map<std::string, VfsEntryType, std::less<>> RealVfsDirectory::GetEntries() 
 
     std::map<std::string, VfsEntryType, std::less<>> out;
 
-    const FS::DirEntryCallable callback = [&out](const std::filesystem::directory_entry& entry) {
-        const auto filename = FS::PathToUTF8String(entry.path().filename());
+    const FS::DirEntryCallable callback = [&out](const std::filesystem::path& entry_path, size_t) {
+        const auto filename = FS::PathToUTF8String(entry_path.filename());
         out.insert_or_assign(filename,
-                             entry.is_directory() ? VfsEntryType::Directory : VfsEntryType::File);
+                             FS::IsDir(entry_path) ? VfsEntryType::Directory : VfsEntryType::File);
         return true;
     };
 

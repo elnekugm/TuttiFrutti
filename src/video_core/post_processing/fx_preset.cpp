@@ -127,9 +127,9 @@ void ReloadFxPresetCatalog() {
     std::vector<std::filesystem::path> preset_files;
     Common::FS::IterateDirEntriesRecursively(
         root,
-        [&](const std::filesystem::directory_entry& entry) {
-            if (entry.path().extension() == ".fxp") {
-                preset_files.push_back(entry.path());
+        [&](const std::filesystem::path& entry_path, size_t) {
+            if (entry_path.extension() == ".fxp") {
+                preset_files.push_back(entry_path);
             }
             return true;
         },

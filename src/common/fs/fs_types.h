@@ -62,13 +62,19 @@ enum class DirEntryFilter {
 DECLARE_ENUM_FLAG_OPERATORS(DirEntryFilter);
 
 /**
- * A callback function which takes in the path of a directory entry.
+ * A callback function which takes in the path of a directory entry and its size in bytes.
  *
- * @param path The path of a directory entry
+ * The path is the caller's own, the directory it iterated joined with the entry's name. It is never
+ * the extended `\\?\` form the iteration itself may need past MAX_PATH: that would become a file's
+ * identity in the VFS, and string operations on it differ.
+ *
+ * @param entry_path The path of a directory entry
+ * @param entry_size The size of the entry in bytes, 0 for a directory
  *
  * @returns A boolean value.
  *          Return true to indicate whether the callback is successful, false otherwise.
  */
-using DirEntryCallable = std::function<bool(const std::filesystem::directory_entry& entry)>;
+using DirEntryCallable =
+    std::function<bool(const std::filesystem::path& entry_path, size_t entry_size)>;
 
 } // namespace Common::FS

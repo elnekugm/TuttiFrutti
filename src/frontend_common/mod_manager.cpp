@@ -16,8 +16,8 @@ namespace FrontendCommon {
 std::vector<std::filesystem::path> GetModFolder(const std::string& root) {
     std::vector<std::filesystem::path> paths;
 
-    auto callback = [&paths](const std::filesystem::directory_entry& entry) -> bool {
-        const auto name = entry.path().filename().string();
+    auto callback = [&paths](const std::filesystem::path& entry_path, size_t) -> bool {
+        const auto name = entry_path.filename().string();
         static const std::array<std::string, 5> valid_names = {"exefs",
                                                                "romfs",
                                                                "romfs_ext",
@@ -25,7 +25,7 @@ std::vector<std::filesystem::path> GetModFolder(const std::string& root) {
                                                                "romfslite"};
 
         if (std::ranges::find(valid_names, name) != valid_names.end()) {
-            const auto parent = entry.path().parent_path();
+            const auto parent = entry_path.parent_path();
             if (std::ranges::find(paths, parent) == paths.end()) {
                 paths.emplace_back(parent);
             }

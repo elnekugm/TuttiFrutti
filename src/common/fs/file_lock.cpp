@@ -31,7 +31,7 @@ namespace {
 #ifdef _WIN32
 
 std::intptr_t OpenLockFile(const std::filesystem::path& path) {
-    const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+    const HANDLE file = CreateFileW(ExtendWin32Path(path).c_str(), GENERIC_READ | GENERIC_WRITE,
                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                                     OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     return file == INVALID_HANDLE_VALUE ? -1 : reinterpret_cast<std::intptr_t>(file);

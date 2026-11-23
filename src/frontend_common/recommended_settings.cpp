@@ -26,8 +26,8 @@ void ForEachGameConfigSection(Func&& func) {
     }
     Common::FS::IterateDirEntries(
         directory,
-        [&](const std::filesystem::directory_entry& entry) {
-            const auto& path = entry.path();
+        [&](const std::filesystem::path& entry_path, size_t) {
+            const auto& path = entry_path;
             if (path.extension() != ".ini") {
                 return true;
             }

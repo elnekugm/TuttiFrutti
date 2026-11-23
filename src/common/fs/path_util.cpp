@@ -7,6 +7,7 @@
 #include <cctype>
 #include <iostream>
 #include <sstream>
+#include <string>
 #include "common/container/unordered_map.h"
 
 #include "common/assert.h"
@@ -53,6 +54,13 @@
 // This is the maximum number of UTF-8 code units permissible in all other OSes' file paths
 #define MAX_PATH 1024
 #endif
+#endif
+
+#ifdef _WIN32
+// Win32 takes 32767 UTF-16 code units of an absolute path that carries the `\\?\` prefix, which
+// ExtendWin32Path adds for the filesystem calls below. MAX_PATH itself may already be defined by
+// the Windows headers, so this stays outside the guard above.
+#define MAX_EXTENDED_PATH 32767
 #endif
 
 namespace Common::FS {
@@ -223,8 +231,10 @@ bool ValidatePath(const fs::path& path) {
     }
 
 #ifdef _WIN32
-    if (path.u16string().size() >= MAX_PATH) {
-        LOG_ERROR(Common_Filesystem, "Input path is too long, path={}", PathToUTF8String(path));
+    if (path.u16string().size() >= MAX_EXTENDED_PATH) {
+        LOG_ERROR(Common_Filesystem,
+                  "Input path is longer than Windows can hold ({} UTF-16 code units), path={}",
+                  MAX_EXTENDED_PATH, PathToUTF8String(path));
         return false;
     }
 #else
@@ -235,6 +245,38 @@ bool ValidatePath(const fs::path& path) {
 #endif
 
     return true;
+}
+
+fs::path ExtendWin32Path(const fs::path& path) {
+#ifdef _WIN32
+    if (path.empty()) {
+        return path;
+    }
+    std::error_code ec;
+    const fs::path& absolute = path.is_absolute() ? path : fs::absolute(path, ec);
+    if (ec) {
+        return path;
+    }
+    std::wstring wide = absolute.wstring();
+    if (wide.starts_with(LR"(\\?\)")) {
+        return absolute;
+    }
+    // `\\?\` turns off the normalisation Win32 does otherwise: `..` and `.` are read literally
+    // after it, so resolve them first.
+    wide = absolute.lexically_normal().wstring();
+    // Win32 reads the prefix literally: it wants backslashes, and nothing between `\\?\` and an
+    // absolute path.
+    std::replace(wide.begin(), wide.end(), L'/', L'\\');
+    if (wide.starts_with(LR"(\\)")) {
+        return fs::path{LR"(\\?\UNC\)" + wide.substr(2)};
+    }
+    if (!(wide.size() >= 2 && wide[1] == L':')) {
+        return path;
+    }
+    return fs::path{LR"(\\?\)" + wide};
+#else
+    return path;
+#endif
 }
 
 fs::path ConcatPath(const fs::path& first, const fs::path& second) {

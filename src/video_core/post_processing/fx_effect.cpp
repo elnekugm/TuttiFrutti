@@ -254,9 +254,9 @@ void ReloadFxCatalog() {
     std::vector<std::filesystem::path> effect_files;
     Common::FS::IterateDirEntriesRecursively(
         root,
-        [&](const std::filesystem::directory_entry& entry) {
-            if (entry.path().extension() == ".fx") {
-                effect_files.push_back(entry.path());
+        [&](const std::filesystem::path& entry_path, size_t) {
+            if (entry_path.extension() == ".fx") {
+                effect_files.push_back(entry_path);
             }
             return true;
         },

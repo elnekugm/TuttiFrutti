@@ -39,7 +39,7 @@ InputProfiles::InputProfiles() {
 
     FS::IterateDirEntries(
         input_profile_loc,
-        [this](const std::filesystem::path& full_path) {
+        [this](const std::filesystem::path& full_path, size_t) {
             const auto filename = full_path.filename();
             const auto name_without_ext =
                 Common::FS::PathToUTF8String(GetNameWithoutExtension(filename));

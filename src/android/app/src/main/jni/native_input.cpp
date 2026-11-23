@@ -311,7 +311,7 @@ void Java_io_github_zortos293_lichii_features_input_NativeInput_loadInputProfile
     if (Common::FS::IsDir(input_profile_loc)) {
         Common::FS::IterateDirEntries(
             input_profile_loc,
-            [&](const std::filesystem::path& full_path) {
+            [&](const std::filesystem::path& full_path, size_t) {
                 const auto filename = full_path.filename();
                 const auto name_without_ext =
                     Common::FS::PathToUTF8String(GetNameWithoutExtension(filename));

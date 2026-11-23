@@ -11,6 +11,7 @@
 #ifdef __ANDROID__
 #include "common/fs/fs_android.h"
 #endif
+#include "common/fs/path_util.h"
 #include "common/logging.h"
 
 #ifdef _WIN32
@@ -254,9 +255,10 @@ void IOFile::Open(const fs::path& path, FileAccessMode mode, FileType type, File
 
 #ifdef _WIN32
     if (flag != FileShareFlag::ShareNone) {
-        file = _wfsopen(path.c_str(), AccessModeToWStr(mode, type), ToWindowsFileShareFlag(flag));
+        file = _wfsopen(ExtendWin32Path(path).c_str(), AccessModeToWStr(mode, type),
+                        ToWindowsFileShareFlag(flag));
     } else {
-        _wfopen_s(&file, path.c_str(), AccessModeToWStr(mode, type));
+        _wfopen_s(&file, ExtendWin32Path(path).c_str(), AccessModeToWStr(mode, type));
     }
 #elif __ANDROID__
     if (Android::IsContentUri(path)) {
@@ -403,7 +405,7 @@ u64 IOFile::GetSize() const {
     } else {
         std::error_code ec;
 
-        file_size = fs::file_size(file_path, ec);
+        file_size = fs::file_size(ExtendWin32Path(file_path), ec);
 
         if (ec) {
             LOG_ERROR(Common_Filesystem,
@@ -415,7 +417,7 @@ u64 IOFile::GetSize() const {
 #else
     std::error_code ec;
 
-    const auto file_size = fs::file_size(file_path, ec);
+    const auto file_size = fs::file_size(ExtendWin32Path(file_path), ec);
 
     if (ec) {
         LOG_ERROR(Common_Filesystem, "Failed to retrieve the file size of path={}, ec_message={}",
