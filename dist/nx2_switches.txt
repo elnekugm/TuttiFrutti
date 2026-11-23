@@ -43,3 +43,11 @@ EDEN_NX2_FENCE_BATCH=1
 #EDEN_NX2_SPLIT_SKIP=1
 #EDEN_NX2_AUTO_STUB=1
 #EDEN_NX2_KEEP_ASTC=1
+
+# --- Per-title switches (docs/nx2/per-game-switches.md) ---
+# A workaround written for one game can be tried in another by appending its program id (the 16
+# hex digits the game list shows) to the switch name. The per-title value wins over the global one.
+# Kirby's written storage pool and baked-lighting rules are on for Kirby by default.
+#EDEN_NX2_SSBO_WRITTEN_SIZE_WORD_0400C3F00006E000=1
+#EDEN_NX2_TC_KEEP_NEWEST_0400C3F00006E000=1
+#EDEN_NX2_TC_KEEP_NEWEST_040077201BE50000=0

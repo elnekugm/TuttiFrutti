@@ -701,12 +701,3 @@ private:
 };
 
 } // namespace Tegra
-
-namespace VideoCommon {
-
-/// Kirby Air Riders (Switch 2). Its written compute storage pool is larger than the 8 MiB cap
-/// (StorageBufferBinding, EDEN_NX2_SSBO_WRITTEN_SIZE_WORD) and its baked vertex lighting lives in
-/// images the collector used to drop as bad overlaps (IsNewestWritten, EDEN_NX2_TC_KEEP_NEWEST).
-constexpr u64 KirbyAirRidersProgramId = 0x040077201BE50000ULL;
-
-} // namespace VideoCommon

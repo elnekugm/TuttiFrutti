@@ -20,6 +20,7 @@
 #include <fmt/ranges.h>
 
 #include "common/range_sets.inc"
+#include "common/nx2_game_switch.h"
 #include "common/settings.h"
 #include "video_core/buffer_cache/buffer_cache_base.h"
 #include "video_core/buffer_cache/compute_write_grid.h"
@@ -4399,18 +4400,17 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
         return NULL_BINDING;
     }
 
-    // A written native compute pointer takes a size word above 8 MiB too: Kirby Air Riders'
-    // particle pool is 64 MiB of 1 KiB pages that its emitter update shaders write, and a cap at
-    // 8 MiB dropped every write past page 8192 (its free list filled with junk: missing UI,
-    // streaks, glowing polygons and a GPU hang in a geometry shader). On for that game only: the
-    // write mark of such a binding grows with it. Ported from Satsuma (FilDev, GPL-3.0).
-    static const bool written_size_word = [] {
-        const char* const value = std::getenv("EDEN_NX2_SSBO_WRITTEN_SIZE_WORD");
-        return value == nullptr || value[0] != '0';
-    }();
-    const bool written_size = written_size_word && native_pointer && compute && is_written &&
-                              !table_pointer &&
-                              Settings::GetCurrentProgramID() == KirbyAirRidersProgramId;
+    // EDEN_NX2_SSBO_WRITTEN_SIZE_WORD (or _<program id>): a written native compute pointer takes
+    // a size word above 8 MiB too. Kirby Air Riders' particle pool is 64 MiB of 1 KiB pages that
+    // its emitter update shaders write: capped at 8 MiB, pages from 8192 on read zero and dropped
+    // their writes, so emitters freed page 0 every frame and the pool's free list filled with
+    // junk (missing UI, streaks, glowing polygons, a GPU hang in a geometry shader). On for that
+    // game only: the write mark of such a binding grows with it. Ported from Satsuma (FilDev).
+    static const Common::Nx2::GameSwitch written_size_word{
+        "EDEN_NX2_SSBO_WRITTEN_SIZE_WORD",
+        [](u64 program_id) { return program_id == Settings::KirbyAirRidersProgramId; }};
+    const bool written_size = written_size_word.Enabled() && native_pointer && compute &&
+                              is_written && !table_pointer;
     const bool reads_size_word =
         !(table_pointer && !is_written) &&
         (!native_pointer || (compute && !is_written) || written_size);

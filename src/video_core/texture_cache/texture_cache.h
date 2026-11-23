@@ -23,6 +23,7 @@
 #include "common/alignment.h"
 #include "common/memory_detect.h"
 #include "common/scope_exit.h"
+#include "common/nx2_game_switch.h"
 #include "common/settings.h"
 #include "common/slot_vector.h"
 #include "video_core/control/channel_state.h"
@@ -1629,19 +1630,17 @@ void TextureCache<P>::WriteMemory(DAddr cpu_addr, size_t size) {
 
 template <class P>
 bool TextureCache<P>::IsNewestWritten(const ImageBase& image) {
-    // EDEN_NX2_TC_KEEP_NEWEST=0 turns it off. Kirby Air Riders renders each mesh's baked vertex
-    // lighting once, at level load, into small render targets (R11G11B10, 64 or 4096 wide) in
-    // memory that held other textures before, and its vertex shaders sample them whenever the mesh
-    // is drawn. The older images on that memory made each one a bad overlap, so the collector
+    // EDEN_NX2_TC_KEEP_NEWEST (or _<program id>). Kirby Air Riders renders each mesh's baked
+    // vertex lighting once, at level load, into small render targets (R11G11B10, 64 or 4096 wide)
+    // in memory that held other textures before, and its vertex shaders sample them whenever the
+    // mesh is drawn. The older images on that memory made each one a bad overlap, so the collector
     // deleted it without writing it back and its next use read the old textures' bytes from guest
     // memory as vertex colours: fences, planks and walls glowing in random colours. The newest
     // image on that memory is kept. Ported from Satsuma (FilDev, GPL-3.0).
-    static const bool keep_newest = [] {
-        const char* const value = std::getenv("EDEN_NX2_TC_KEEP_NEWEST");
-        return value == nullptr || value[0] != '0';
-    }();
-    if (!keep_newest || False(image.flags & ImageFlagBits::GpuModified) ||
-        Settings::GetCurrentProgramID() != KirbyAirRidersProgramId) {
+    static const Common::Nx2::GameSwitch keep_newest{
+        "EDEN_NX2_TC_KEEP_NEWEST",
+        [](u64 program_id) { return program_id == Settings::KirbyAirRidersProgramId; }};
+    if (!keep_newest.Enabled() || False(image.flags & ImageFlagBits::GpuModified)) {
         return false;
     }
     // Watched again when a later image overlaps it (JoinImages).
