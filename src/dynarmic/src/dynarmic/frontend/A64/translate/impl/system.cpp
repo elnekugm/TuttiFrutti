@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <atomic>
+
 #include "dynarmic/frontend/A64/translate/impl/impl.h"
 
 namespace Dynarmic::A64 {
@@ -17,6 +19,15 @@ enum class SystemRegisterEncoding : u32 {
     CNTFRQ_EL0 = 0b11'1110'011'000'0000,
     // Counter-timer Physical Count register
     CNTPCT_EL0 = 0b11'1110'011'001'0000,
+    // Counter-timer Virtual Count register (CNTVOFF_EL2 is 0 here, so it is the physical count)
+    CNTVCT_EL0 = 0b11'1110'011'010'0000,
+    // Counter-timer Self-Synchronized Physical and Virtual Count registers (FEAT_ECV)
+    CNTPCTSS_EL0 = 0b11'1110'000'101'0000,
+    CNTVCTSS_EL0 = 0b11'1110'000'110'0000,
+    // Performance Monitors Cycle Count register: 0 while the counter is not enabled (PMCR.E)
+    PMCCNTR_EL0 = 0b11'1001'011'000'1101,
+    // Debug Communications Channel Status register: 0 with no debug events
+    MDCCSR_EL0 = 0b10'0000'011'000'0001,
     // Cache Type Register
     CTR_EL0 = 0b11'0000'011'001'0000,
     // Data Cache Zero ID register
@@ -32,6 +43,16 @@ enum class SystemRegisterEncoding : u32 {
     // Read-Only Software Thread ID Register
     TPIDRRO_EL0 = 0b11'1101'011'011'0000,
 };
+
+namespace {
+/// Whether the first few reads or writes of a system register the translator doesn't name are
+/// raised for the emulator to log (PC and instruction word). After that they are only skipped, so
+/// a register a game polls can't flood the log.
+bool UnknownSystemRegisterRaised() {
+    static std::atomic<u32> raised{0};
+    return raised.fetch_add(1, std::memory_order_relaxed) < 8;
+}
+} // Anonymous namespace
 
 bool TranslatorVisitor::HINT([[maybe_unused]] Imm<4> CRm, [[maybe_unused]] Imm<3> op2) {
     return true;
@@ -128,7 +149,12 @@ bool TranslatorVisitor::MSR_reg(Imm<1> o0, Imm<3> op1, Imm<4> CRn, Imm<4> CRm, I
     default:
         break;
     }
-    UNREACHABLE();
+    // As MRS: a system register this fork doesn't name is skipped (the write is lost) and the
+    // first few are raised so the emulator logs the instruction word. UNREACHABLE() aborted here.
+    if (UnknownSystemRegisterRaised()) {
+        return RaiseException(Exception::UnallocatedEncoding);
+    }
+    return true;
 }
 
 bool TranslatorVisitor::MRS(Imm<1> o0, Imm<3> op1, Imm<4> CRn, Imm<4> CRm, Imm<3> op2, Reg Rt) {
@@ -167,8 +193,26 @@ bool TranslatorVisitor::MRS(Imm<1> o0, Imm<3> op1, Imm<4> CRn, Imm<4> CRm, Imm<3
     case SystemRegisterEncoding::TPIDRRO_EL0:
         X(64, Rt, ir.GetTPIDRRO());
         return true;
+    case SystemRegisterEncoding::CNTVCT_EL0:
+    case SystemRegisterEncoding::CNTPCTSS_EL0:
+    case SystemRegisterEncoding::CNTVCTSS_EL0:
+        X(64, Rt, ir.GetCNTPCT());
+        return true;
+    case SystemRegisterEncoding::PMCCNTR_EL0:
+        X(64, Rt, ir.Imm64(0));
+        return true;
+    case SystemRegisterEncoding::MDCCSR_EL0:
+        X(32, Rt, ir.Imm32(0));
+        return true;
     }
-    UNREACHABLE();
+    // A system register this fork doesn't name (Ocarina of Time 2.0.0 reads one at boot): the
+    // guest reads 0 and keeps running, and the first few of them are raised so the emulator logs
+    // the PC and the instruction word, which names the register. UNREACHABLE() aborted here.
+    X(64, Rt, ir.Imm64(0));
+    if (UnknownSystemRegisterRaised()) {
+        return RaiseException(Exception::UnallocatedEncoding);
+    }
+    return true;
 }
 
 }  // namespace Dynarmic::A64
