@@ -11,6 +11,10 @@ on:
         description: Publish the packages as a GitHub release
         type: boolean
         default: true
+      platforms:
+        description: Platforms to build, comma-separated (empty builds all eight)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -46,6 +50,10 @@ jobs:
             echo "::error::release_tag must look like build-1 or build-1.1, got '$tag'"
             exit 1
           fi
+          if [[ -n "${{ inputs.platforms }}" ]]; then
+            echo "::error::A published release needs every platform; leave platforms empty"
+            exit 1
+          fi
           if tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null); then
             if [ "$tag_sha" != "$GITHUB_SHA" ]; then
               echo "::error::Release tag $tag points to $tag_sha instead of $GITHUB_SHA"
@@ -59,6 +67,9 @@ jobs:
   build:
     name: ${{ matrix.platform }}
     needs: prepare-release
+    # A dev build can name one or a few platforms; a published release leaves this empty and builds
+    # all eight (the release job checks that it found all of them).
+    if: ${{ inputs.platforms == '' || contains(inputs.platforms, matrix.platform) }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
