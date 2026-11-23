@@ -65,6 +65,7 @@ SWITCHABLE(AnisotropyMode, true);
 SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
 SWITCHABLE(OcarinaShadowSize, false);
+SWITCHABLE(OcarinaResolution, false);
 SWITCHABLE(NvidiaDlssQuality, false);
 SWITCHABLE(NvidiaDlssPreset, false);
 SWITCHABLE(HdrMode, false);
@@ -454,6 +455,12 @@ struct Values {
     // The resolution of Ocarina of Time's local depth shadow atlas (12288x12288 at Full).
     SwitchableSetting<OcarinaShadowSize> ocarina_local_shadow_size{
         linkage, OcarinaShadowSize::Full, "ocarina_local_shadow_size", Category::RendererAdvanced};
+    // Ocarina of Time's docked (TV) output resolution, or Auto for the Resolution setting. The game
+    // renders its 3D at up to 1440p docked (810p-1080p handheld) and upscales it with its own
+    // passes; this picks the scale those land on (1080p = 3/4X, 1440p = 1X, 2160p = 3/2X), so
+    // handheld gets 810p, 1080p or 1620p from the same choice.
+    SwitchableSetting<OcarinaResolution> ocarina_resolution{
+        linkage, OcarinaResolution::Auto, "ocarina_resolution", Category::Renderer};
     // AMD FSR 4 in place of FSR 3.1 where FSR replaces a game's upscaler (Windows, AMD's driver).
     SwitchableSetting<bool> amd_fsr4{linkage, false, "amd_fsr4", Category::Renderer};
     SwitchableSetting<AspectRatio, true> aspect_ratio{linkage,

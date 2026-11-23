@@ -23,6 +23,7 @@
 #include "common/assert.h"
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
+#include "common/game_presets.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/time_zone.h"
@@ -48,6 +49,7 @@ SWITCHABLE(AnisotropyMode, true);
 SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
 SWITCHABLE(OcarinaShadowSize, false);
+SWITCHABLE(OcarinaResolution, false);
 SWITCHABLE(NvidiaDlssQuality, false);
 SWITCHABLE(NvidiaDlssPreset, false);
 SWITCHABLE(HdrMode, false);
@@ -445,7 +447,26 @@ void TranslateResolutionInfo(ResolutionSetup setup, ResolutionScalingInfo& info)
 }
 
 void UpdateRescalingInfo() {
-    const auto setup = values.resolution_setup.GetValue();
+    ResolutionSetup setup = values.resolution_setup.GetValue();
+    // Ocarina of Time: a TV resolution chosen for it overrides the Resolution setting's scale, so
+    // the game's own 1440p docked output (1080p handheld) lands on the chosen one. The program id
+    // is set by Core before the GPU is created, where this runs (VideoCore::CreateGPU).
+    const OcarinaResolution ocarina = values.ocarina_resolution.GetValue();
+    if (ocarina != OcarinaResolution::Auto && GetCurrentProgramID() == OcarinaOfTimeProgramId) {
+        switch (ocarina) {
+        case OcarinaResolution::Res1080p:
+            setup = ResolutionSetup::Res3_4X;
+            break;
+        case OcarinaResolution::Res1440p:
+            setup = ResolutionSetup::Res1X;
+            break;
+        case OcarinaResolution::Res2160p:
+            setup = ResolutionSetup::Res3_2X;
+            break;
+        case OcarinaResolution::Auto:
+            break;
+        }
+    }
     auto& info = values.resolution_info;
     TranslateResolutionInfo(setup, info);
 }

@@ -153,6 +153,7 @@ ENUM(ScalingFilter, NearestNeighbor, Bilinear, Bicubic, Gaussian, Lanczos, Scale
 ENUM(AntiAliasing, None, Fxaa, Smaa);
 ENUM(OotAntiAliasing, Game, NoSharpening);
 ENUM(OcarinaShadowSize, Full, Half, Quarter);
+ENUM(OcarinaResolution, Auto, Res1080p, Res1440p, Res2160p);
 ENUM(NvidiaDlssQuality, Automatic, Native, Quality, Balanced, Performance, UltraPerformance);
 ENUM(NvidiaDlssPreset, M, NvidiaDefault, E, F, J, K, L);
 ENUM(HdrMode, Off, On, Auto);

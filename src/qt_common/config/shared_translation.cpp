@@ -203,6 +203,12 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Size of the shadow map for nearby objects in Ocarina of Time's towns. Half saves "
               "about 216 MB of video memory, Quarter about 270 MB. Shadows look nearly the same. "
               "Restart the game to apply."));
+    INSERT(Settings, ocarina_resolution, tr("Output resolution (TV)"),
+           tr("Ocarina of Time renders its 3D at up to 1440p docked and upscales it with its own "
+              "passes. This picks the resolution those land on: 1080p, 1440p (the game's own) or "
+              "2160p (4K). Handheld scales the same way, to 810p, 1080p or 1620p. Auto follows the "
+              "Resolution setting. Only applies to Ocarina of Time; takes effect when a game "
+              "starts, and higher resolutions need more VRAM."));
 #if defined(__linux__) && !defined(__ANDROID__)
     INSERT(Settings, amd_fsr4, tr("Use FSR 4 (fsr4-vk community Vulkan port) in place of FSR 3.1"),
            tr("Uses fsr4-vk, a community Vulkan port of AMD's ML-based FSR 4.1.1 that TuttiFrutti's "
@@ -763,6 +769,13 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(OcarinaShadowSize, Full, tr("Full (12288x12288)")),
                               PAIR(OcarinaShadowSize, Half, tr("Half (6144x6144)")),
                               PAIR(OcarinaShadowSize, Quarter, tr("Quarter (3072x3072)")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::OcarinaResolution>::Index(),
+                          {
+                              PAIR(OcarinaResolution, Auto, tr("Auto (Resolution setting)")),
+                              PAIR(OcarinaResolution, Res1080p, tr("1080p")),
+                              PAIR(OcarinaResolution, Res1440p, tr("1440p")),
+                              PAIR(OcarinaResolution, Res2160p, tr("2160p (4K)")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::HdrMode>::Index(),
                           {

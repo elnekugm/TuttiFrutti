@@ -221,6 +221,7 @@ add_executable(tests
     common/multi_level_page_table.cpp
     common/nextendo.cpp
     common/npln_patch_manifest.cpp
+    common/ocarina_resolution.cpp
     common/page_table.cpp
     common/param_package.cpp
     common/poll_window.cpp
