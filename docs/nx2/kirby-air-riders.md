@@ -1,5 +1,36 @@
 # Kirby Air Riders fixes (title `040077201BE50000`)
 
+## Device loss in races (a corrupted list, and warp-synchronous shared memory)
+
+A few minutes into a race the GPU faults: the log's device fault carries an
+`instruction pointer (fault)` and an `invalid read`. This is upstream issue
+[Lichii#1693]. A compute program (`1175573eed7481a4`) walks a linked list in GPU
+memory; when a node's next index is wrong or the end marker is lost, the loop
+never ends. The loop safety counter cuts it off after 8192 iterations, the
+records it never wrote keep vertex-like data, and the game's 3D macros (`0x1d2`,
+`0x1e7`) read those words as draw counts: draws of about two billion vertices,
+which the GPU runs until it faults. On AMD the same corruption shows as geometry
+drawn from the wrong place (Orbitals' aurora loses a quarter of its sort keys).
+
+The list is corrupted because guest code reads shared-memory words that other
+threads of its warp just stored, with no barrier in between (warp-synchronous
+scans and reductions): the console's warp runs in step, Vulkan orders such
+accesses only through a barrier. `WarpSharedOrderPass` puts one before every
+shared load a store can reach with no guest barrier on the way, and those
+programs run whole guest warps. Ported from [Lichii#2082] (open upstream).
+
+The barrier's form is a switch, because the PR's memory barrier does not make a
+subgroup's lanes rendezvous and NVIDIA's independent thread scheduling can drift
+them apart:
+
+| `EDEN_NX2_WARP_SHARED_BARRIER` | Emitted | Needs |
+|---|---|---|
+| unset or `0` | `OpMemoryBarrier` (subgroup, acquire-release on shared) | nothing: legal wherever the load is |
+| `1` | `OpControlBarrier` subgroup (execution and memory) | the subgroup's active lanes reach it, as the guest assumes |
+| `2` | `OpControlBarrier` workgroup | every thread of the workgroup reaches it |
+
+## Light probes read per invocation (dark riders)
+
 Ports from [Satsuma](https://gitlab.com/FilDev/Satsuma) (FilDev, GPL-3.0), which
 plays the game on its Fritchii base. Each one is on for this title only unless noted, and
 each can be turned off:
@@ -76,3 +107,5 @@ Satsuma also reads Kirby's shaders for its warm-up from the game's asset catalog
 fragment entries from them. Our shader precache (`docs/nx2/shader-precompile.md`) already
 reads those frames and builds the compute programs; the graphics half stays as recorded
 pipelines, because a graphics stage cannot be translated without its draw state.
+[Lichii#1693]: https://github.com/zortos293/Lichii/issues/1693
+[Lichii#2082]: https://github.com/zortos293/Lichii/pull/2082
