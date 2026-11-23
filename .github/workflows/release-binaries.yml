@@ -638,7 +638,17 @@ jobs:
           cat > notes.md <<EOF
           TuttiFrutti ${tag}, built automatically from ${GITHUB_SHA}.
 
-          **What's new in 1.4**
+          **What's new in 1.5**
+          - **Kirby Air Riders' riders are lit again.** Its light-probe pass reads each thread's
+            texture handles from a table in memory, by a set number it reads per thread; the handle
+            was resolved to the sampler bits alone, so the probes came out black and the ambient
+            light with them. The table's handles are now bound as an array and each thread picks
+            its own (Satsuma 4bcf341cf2), on top of the particle-pool, baked vertex lighting and
+            macro DMA fixes below.
+          - **Windows paths past 260 characters work.** Ocarina of Time could not create its save
+            data in a folder with a long name and aborted on its own (0x7d402). Save data, mods,
+            NAND and cache now take the extended path form, and a directory walk no longer hands
+            its callers that form, which had stopped the patch manager finding a user mod.
           - **Precompile All Shaders, per game.** A game's context menu builds that game's shaders
             once on the loading screen: the compute programs read from your own game files, plus
             every pipeline your earlier sessions recorded for that title. It covers about 95% of
