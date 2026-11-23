@@ -494,7 +494,6 @@ void GameHome::UpdateIconSize() {
 
 void GameHome::SetMenuBar(QMenuBar* menu_bar_) {
     menu_bar = menu_bar_;
-    HideWhileShown(menu_bar_);
     if (isVisible()) {
         RebuildPills();
     }
@@ -595,36 +594,6 @@ void GameHome::SetButtonStyle(ButtonStyle style) {
     }
     button_style = style;
     UpdateHints();
-}
-
-void GameHome::HideWhileShown(QWidget* bar) {
-    if (bar == nullptr) {
-        return;
-    }
-    bar->installEventFilter(this);
-    HiddenBar entry{bar, bar->isVisible()};
-    if (isVisible()) {
-        bar->hide();
-    }
-    hidden_bars.push_back(entry);
-}
-
-bool GameHome::eventFilter(QObject* object, QEvent* event) {
-    // Something showed a hidden bar while the home screen is up (leaving fullscreen does):
-    // remember that it should come back afterwards, and hide it again.
-    if (event->type() == QEvent::Show && isVisible()) {
-        for (HiddenBar& entry : hidden_bars) {
-            if (entry.bar == object) {
-                entry.was_visible = true;
-                QTimer::singleShot(0, entry.bar, [this, bar = entry.bar] {
-                    if (bar && isVisible()) {
-                        bar->hide();
-                    }
-                });
-            }
-        }
-    }
-    return QListView::eventFilter(object, event);
 }
 
 void GameHome::RebuildPills() {
@@ -753,12 +722,6 @@ void GameHome::showEvent(QShowEvent* event) {
         }
         RebuildPills();
     }
-    for (HiddenBar& entry : hidden_bars) {
-        if (entry.bar) {
-            entry.was_visible = entry.bar->isVisible();
-            entry.bar->hide();
-        }
-    }
     LayoutChrome();
     RefreshChips();
     EnsureCurrent();
@@ -774,11 +737,6 @@ void GameHome::showEvent(QShowEvent* event) {
 
 void GameHome::hideEvent(QHideEvent* event) {
     QListView::hideEvent(event);
-    for (const HiddenBar& entry : hidden_bars) {
-        if (entry.bar && entry.was_visible) {
-            entry.bar->show();
-        }
-    }
     pulse_animation->stop();
     refresh_timer->stop();
     adjusting = false;

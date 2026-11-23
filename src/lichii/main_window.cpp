@@ -4131,11 +4131,8 @@ void MainWindow::ShowFullscreen() {
     if (ui->action_Single_Window_Mode->isChecked()) {
         UISettings::values.geometry = saveGeometry();
 
-        // The menus and the status bar stay: hiding them here left a game without either when the
-        // window left single-window fullscreen by a path that did not run HideFullscreen (a crash,
-        // a renderer that changed the flags, a stop that tore the window down).
-        ui->menubar->show();
-        statusBar()->setVisible(ui->action_Show_Status_Bar->isChecked());
+        ui->menubar->hide();
+        statusBar()->hide();
 
         show_fullscreen(this);
     } else {
@@ -4288,8 +4285,9 @@ void MainWindow::SetHomeView() {
 
 void MainWindow::SetupHomeView() {
     game_list->SetHomeMenuBar(ui->menubar);
-    // The chips below the games show the same settings: the status bar is hidden there.
-    game_list->Home()->HideWhileShown(statusBar());
+    // The menus and the status bar stay up here: the home screen's pills still reach the same
+    // menus and the same settings, but hiding the bars made them disappear for good when a game
+    // was started from this view (the home screen hid them, a start did not run its restore).
 
     const auto button_chip = [](const QString& caption, QPushButton* button, bool dims,
                                 QColor color) {

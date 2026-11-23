@@ -60,11 +60,8 @@ public:
     void ApplyFilter(const QString& edit_filter_text, GameListModel* model);
     void UpdateIconSize();
 
-    /// The main window's menu bar: its menus become the pills at the top, and it is hidden while
-    /// the home screen shows.
+    /// The main window's menu bar: its menus become the pills at the top. It stays visible.
     void SetMenuBar(QMenuBar* menu_bar);
-    /// Bars hidden while the home screen shows (the status bar: the chips replace it).
-    void HideWhileShown(QWidget* bar);
     void SetChips(std::vector<HomeChip> chips);
     void SetButtonStyle(ButtonStyle style);
     void RefreshChips();
@@ -87,7 +84,6 @@ protected:
     void hideEvent(QHideEvent* event) override;
     void currentChanged(const QModelIndex& current, const QModelIndex& previous) override;
     void mousePressEvent(QMouseEvent* event) override;
-    bool eventFilter(QObject* object, QEvent* event) override;
 
 private:
     enum class Row { Menus, Cards, Chips };
@@ -106,11 +102,6 @@ private:
     void RebuildPills();
     void StyleChip(size_t index);
 
-    struct HiddenBar {
-        QPointer<QWidget> bar;
-        bool was_visible = false;
-    };
-    std::vector<HiddenBar> hidden_bars;
     ButtonStyle button_style = ButtonStyle::Keyboard;
 
     HomeCard* card_delegate = nullptr;
