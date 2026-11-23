@@ -1416,17 +1416,22 @@ bool DependsOnMemoryLoad(const IR::Value& value) {
 // The program info of the pass running on this thread (its storage buffers, for handle tables).
 thread_local const Info* g_handle_info{};
 
-// Handle tables hold a few handles; the array has the table's words plus room for the host
-// storage alignment the shader's offsets start from (the buffer address aligned down).
-constexpr u32 HANDLE_TABLE_SLACK = 16;
-constexpr u32 HANDLE_TABLE_MAX = 64;
+// The elements of a handle table's descriptor array: room for the longest table a game gives the
+// shader, plus the host storage alignment the shader's offsets start from (the buffer address
+// aligned down, up to 16 words). The array is not sized from the table as it is while the shader
+// is translated: the game keeps the shader and hands it a longer table on a bigger map (Kirby Air
+// Riders' light probes: 8 sets of 3 light volume textures in the menus, 26 on Waveflow Waters),
+// and every element past the array's end read the array's last texture. Each draw fills only the
+// words the table has (EvaluateTextureHandleElement), the others get no texture.
+constexpr u32 HANDLE_TABLE_MAX = 256;
 
 // The handle of `inst` as a handle table descriptor array: a handle program that reads the table
 // word of each element (HandleOp::TableWord), indexed by the shader's own byte offset into the
 // table. Nothing when the handle has no such table or the program can't be built. The index
 // mechanism (g_handle_index_allowed) is on for the build, so a handle it already serves (Ocarina
 // of Time's light tables) is left to it.
-std::optional<ConstBufferAddr> TryHandleTable(const IR::Inst& inst, Environment& env,
+std::optional<ConstBufferAddr> TryHandleTable(const IR::Inst& inst,
+                                              [[maybe_unused]] Environment& env,
                                               const IR::Block* block) {
     if (!g_handle_programs || !g_handle_info || inst.Arg(0).IsImmediate()) return std::nullopt;
     std::vector<u32> code;
@@ -1450,11 +1455,7 @@ std::optional<ConstBufferAddr> TryHandleTable(const IR::Inst& inst, Environment&
     if (table.binding >= storage.size() || storage[table.binding].indirect_offset != ~0U) {
         return std::nullopt;
     }
-    const auto& buffer{storage[table.binding]};
-    const u32 size{env.ReadCbufValue(buffer.cbuf_index, buffer.cbuf_offset + 8)};
-    if (size == 0) return std::nullopt;
-    const u32 words{(std::min)(size / 4 + 1, HANDLE_TABLE_MAX)};
-    const u32 count{(std::min)(words + HANDLE_TABLE_SLACK, HANDLE_TABLE_MAX)};
+    const u32 count{HANDLE_TABLE_MAX};
     TrimTrailingTees(code);
     auto& programs{*g_handle_programs};
     auto it{std::ranges::find(programs, code)};

@@ -512,7 +512,9 @@ TEST_CASE("A handle from a table at an offset no index word gives is a handle ta
         const auto& descriptor{shader.Descriptor(sample)};
         REQUIRE(descriptor.handle_program != ~0U);
         CHECK(VideoCommon::IsHandleTable(descriptor));
-        CHECK(descriptor.count == 6 + 1 + 16);
+        // Room for the longest table a game hands the shader, not the 6 words this one has: the
+        // array must not be sized from the table the shader sees while it is translated.
+        CHECK(descriptor.count == 256);
         CHECK(descriptor.size_shift == 2);
         // The instruction indexes the array with its own byte offset into the table, shifted to a
         // word of 4 bytes.
