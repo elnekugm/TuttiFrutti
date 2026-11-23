@@ -2907,6 +2907,12 @@ void MainWindow::OnEmulationStopped() {
     frame_gen_status_button->setEnabled(true);
     refresh_button->setEnabled(true);
 
+    // Single-window fullscreen used to hide these, and a stop that did not run HideFullscreen (a
+    // crash, a forced shutdown, a renderer that changed the window flags) left the game list with
+    // neither the menus nor the status bar. They stay visible from here on.
+    ui->menubar->show();
+    statusBar()->setVisible(ui->action_Show_Status_Bar->isChecked());
+
     if (!firmware_label->text().isEmpty()) {
         firmware_label->setVisible(true);
     }
@@ -4125,8 +4131,11 @@ void MainWindow::ShowFullscreen() {
     if (ui->action_Single_Window_Mode->isChecked()) {
         UISettings::values.geometry = saveGeometry();
 
-        ui->menubar->hide();
-        statusBar()->hide();
+        // The menus and the status bar stay: hiding them here left a game without either when the
+        // window left single-window fullscreen by a path that did not run HideFullscreen (a crash,
+        // a renderer that changed the flags, a stop that tore the window down).
+        ui->menubar->show();
+        statusBar()->setVisible(ui->action_Show_Status_Bar->isChecked());
 
         show_fullscreen(this);
     } else {
