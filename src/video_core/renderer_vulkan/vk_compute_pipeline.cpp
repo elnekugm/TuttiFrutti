@@ -272,7 +272,8 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         // running in step: at a smaller subgroup size it reads stale shared memory, which shows as
         // banding over the image in Mario Kart World on Intel's Windows driver.
         const bool uses_warp_ops = info.demoted_conditional_barrier ||
-                                   info.uses_subgroup_vote || info.uses_subgroup_invocation_id ||
+                                   info.orders_warp_shared_memory || info.uses_subgroup_vote ||
+                                   info.uses_subgroup_invocation_id ||
                                    info.uses_subgroup_shuffles || info.uses_subgroup_mask ||
                                    info.uses_quad_shuffles || info.uses_fswzadd ||
                                    info.uses_cooperative_matrix;

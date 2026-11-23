@@ -298,6 +298,7 @@ add_executable(tests
     video_core/shader_attributes.cpp
     video_core/indirect_reset.cpp
     video_core/stale_pages.cpp
+    video_core/warp_shared_order.cpp
     input_common/calibration_configuration_job.cpp
     common/long_paths.cpp
 )
