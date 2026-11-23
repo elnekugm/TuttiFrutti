@@ -64,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           wanted="${WANTED// /}"
-          matrix='['
+          matrix='{"include":['
           first=1
           while read -r platform runner preset profile; do
             if [[ -z "${platform:-}" ]]; then
@@ -79,8 +79,8 @@ jobs:
             matrix+="{\"platform\":\"$platform\",\"runner\":\"$runner\",\"preset\":\"$preset\",\"profile\":\"$profile\"}"
             first=0
           done <<< "$RELEASE_PLATFORMS"
-          matrix+=']'
-          if [[ "$matrix" == '[]' ]]; then
+          matrix+=']}'
+          if [[ "$matrix" == '{"include":[]}' ]]; then
             echo "::error::no platform matches '${wanted}'"
             exit 1
           fi
