@@ -661,8 +661,13 @@ jobs:
           - **Interface.** Frutiger Aero themes, a RAM/VRAM overlay that names the active upscaler,
             the Switch 2 home view with banner artwork, controller navigation in dialogs, and a
             faster game library refresh.
-          - Ocarina of Time gets a local shadow atlas size setting; Super Mario Bros. Wonder
-            (Switch 2 Edition) gets its built-in 60 FPS patch.
+          - **Kirby Air Riders** keeps its particles and HUD (its written compute pool is no longer
+            capped at 8 MiB, which broke its free list and hung the GPU), its baked vertex lighting
+            (the newest image on reused memory is kept), and its macro DMA reads wait for the GPU
+            after a failed macro (the Waveflow Waters freeze).
+          - Ocarina of Time gets an **Output resolution (TV)** setting: 1080p, 1440p or 2160p (4K)
+            docked, 810p, 1080p or 1620p handheld, on top of its local shadow atlas size setting;
+            Super Mario Bros. Wonder (Switch 2 Edition) gets its built-in 60 FPS patch.
           - Optional: EDEN_NX2_GPU_WATCHDOG=<seconds> writes a clear log line and exits when the
             GPU stops making progress, instead of leaving a frozen window. Off by default.
 
