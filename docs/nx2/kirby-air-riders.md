@@ -29,6 +29,29 @@ them apart:
 | `1` | `OpControlBarrier` subgroup (execution and memory) | the subgroup's active lanes reach it, as the guest assumes |
 | `2` | `OpControlBarrier` workgroup | every thread of the workgroup reaches it |
 
+### The barrier is not what stops the device loss (tested)
+
+Raced until the fault on the owner's Windows machine with an NVIDIA GPU (build
+`136534fd58`, 2026-11-23), once per form:
+
+| `EDEN_NX2_WARP_SHARED_BARRIER` | Fault | Visual corruption before it |
+|---|---|---|
+| unset | device loss at 93 s | the most |
+| `1` | device loss at 98 s | less |
+| `2` | device loss at 107 s | less |
+
+All three carry the same device fault: `instruction pointer (fault)` plus an
+`invalid read` at a 2 MiB-aligned address (`0x4a9600000`, `0x4a8400000`,
+`0x4aae00000`). So the missing barrier is a real defect — the control barrier
+visibly reduces the corruption, and #2082 stays worth having — but it is **not**
+the source of the corrupted list: with all three forms in place the list is still
+corrupted and the GPU still faults. [Lichii#1693] is still open for that, and the
+reports there carry the same signature on build 386 (an RTX 4070 Ti log closed as
+a duplicate on 2026-11-23; Nsight Aftermath dumps of an MMU fault inside the loop
+shader, also at 2 MiB-aligned addresses). What is left there is a GPU trace: the
+bad records are written by one of the six compute dispatches that fill those
+pages, and only the memory itself names which.
+
 ## Light probes read per invocation (dark riders)
 
 Ports from [Satsuma](https://gitlab.com/FilDev/Satsuma) (FilDev, GPL-3.0), which
