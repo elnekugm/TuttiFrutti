@@ -68,6 +68,9 @@ struct ConstBufferAddr {
     u32 count;
     bool has_secondary;
     u32 handle_program{~0U}; ///< index in Info::handle_programs for a handle computed per draw
+    /// The handle is an element of a handle table (see shader_handle_program.h): an array of the
+    /// table's handles, indexed by the byte offset of its 4-byte words (size_shift 2).
+    bool handle_table{};
 };
 
 class Environment {

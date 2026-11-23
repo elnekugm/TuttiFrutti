@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -116,6 +117,55 @@ void EvaluateTextureHandles(const Shader::Info& info, u32 program, Memory& gpu_m
                                                       read_storage, element)
                             .value_or(0U));
     }
+}
+
+/// The handle of element `element` of a handle table descriptor array (HandleOp::TableWord): the
+/// word at byte element * 4 of the table's storage buffer, from the same aligned-down address
+/// StorageBufferBase gives. Nothing for an element outside the buffer's own range (its address to
+/// address + size), which the array's elements past the table bind as no texture.
+template <typename Memory, typename CbufAddress>
+std::optional<u32> EvaluateTextureHandleElement(const Shader::Info& info, u32 program,
+                                                Memory& gpu_memory, CbufAddress&& cbuf_address,
+                                                u64 storage_alignment, u32 element) {
+    const GPUVAddr storage_mask{~(GPUVAddr{(std::max)(storage_alignment, u64{1})} - 1)};
+    const auto read_table = [&](u32 binding) -> std::optional<u32> {
+        if (binding >= info.storage_buffers_descriptors.size()) {
+            return std::nullopt;
+        }
+        const auto& descriptor{info.storage_buffers_descriptors[binding]};
+        const GPUVAddr cbuf{cbuf_address(descriptor.cbuf_index)};
+        if (cbuf == 0 || descriptor.indirect_offset != ~0U) {
+            return std::nullopt;
+        }
+        const GPUVAddr address{gpu_memory.template Read<u64>(cbuf + descriptor.cbuf_offset)};
+        const u32 size{gpu_memory.template Read<u32>(cbuf + descriptor.cbuf_offset + 8)};
+        const GPUVAddr word{(address & storage_mask) + GPUVAddr{element} * 4};
+        if (address == 0 || word < address || word + 4 > address + size) {
+            return std::nullopt;
+        }
+        return gpu_memory.template Read<u32>(word);
+    };
+    return Shader::EvaluateHandleProgramWithTable(
+        info.handle_programs[program],
+        [&](u32 index, u32 offset) -> u32 {
+            const GPUVAddr base{cbuf_address(index)};
+            return base != 0 ? gpu_memory.template Read<u32>(base + offset) : 0U;
+        },
+        [&](u32 binding, u32 offset) -> u32 {
+            const GPUVAddr base{
+                StorageBufferBase(info, binding, gpu_memory, cbuf_address, storage_alignment)};
+            return base != 0 ? gpu_memory.template Read<u32>(base + offset) : 0U;
+        },
+        read_table, element);
+}
+
+/// Whether descriptor `desc` is a handle table: an array of the handles a storage buffer holds,
+/// which the shader indexes per invocation, each element evaluated with
+/// EvaluateTextureHandleElement. A table is the only descriptor whose handle program is indexed
+/// by a byte offset into its buffer (TextureDescriptor::handle_table).
+template <typename Descriptor>
+[[nodiscard]] bool IsHandleTable(const Descriptor& desc) {
+    return desc.handle_program != ~0U && desc.handle_table;
 }
 
 /// Logs what the elements of a descriptor array of handle program results (a table of per-light

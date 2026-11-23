@@ -197,6 +197,8 @@ struct TextureBufferDescriptor {
     /// Index in Info::handle_programs when the handle is computed at draw time (read from a
     /// storage buffer), ~0 when it is the constant buffer word.
     u32 handle_program{~0U};
+    /// Whether the handle is an element of a handle table (see TextureDescriptor::handle_table).
+    bool handle_table{};
 
     auto operator<=>(const TextureBufferDescriptor&) const = default;
 };
@@ -214,6 +216,8 @@ struct ImageBufferDescriptor {
     /// Index in Info::handle_programs when the handle is computed at draw time (read from a
     /// storage buffer), ~0 when it is the constant buffer word.
     u32 handle_program{~0U};
+    /// Whether the handle is an element of a handle table (see TextureDescriptor::handle_table).
+    bool handle_table{};
 
     auto operator<=>(const ImageBufferDescriptor&) const = default;
 };
@@ -241,6 +245,11 @@ struct TextureDescriptor {
     /// Whether the shader indexes the descriptor: an array, whose count the descriptor limits set
     /// (LimitSampledTextureArrays). It stays one when they cut it to a single element.
     bool is_descriptor_array{};
+    /// Whether the handle is an element of a handle table: a storage buffer of handles the shader
+    /// indexes per invocation (Kirby Air Riders' light probes), each its own array element
+    /// (evaluate with EvaluateTextureHandleElement, indexed by the byte offset of the table's
+    /// 4-byte words).
+    bool handle_table{};
     /// Whether the constant buffer word above reaches the handle only as the address of a load:
     /// a pointer, never a texture handle, which binds no texture (see HandleIsStoragePointer)
     bool handle_is_pointer_word{};
@@ -263,6 +272,8 @@ struct ImageDescriptor {
     /// Index in Info::handle_programs when the handle is computed at draw time (read from a
     /// storage buffer), ~0 when it is the constant buffer word.
     u32 handle_program{~0U};
+    /// Whether the handle is an element of a handle table (see TextureDescriptor::handle_table).
+    bool handle_table{};
 
     auto operator<=>(const ImageDescriptor&) const = default;
 };
@@ -442,14 +453,20 @@ enum class HandleOp : u32 {
     Tee,    ///< slot: keeps the top value in the slot (shared subexpressions)
     Load,   ///< slot: the value kept there
     Index,  ///< the element of the descriptor array being computed (see TextureDescriptor)
+    /// binding: word `element` of a handle table, the storage buffer the shader indexes per
+    /// invocation (a descriptor array of the table's handles, see TexturePass).
+    TableWord,
 };
 
 /// Runs a handle program; read_cbuf(index, offset) and read_storage(binding, offset) return the
-/// words it reads, and element is the descriptor array element computed (HandleOp::Index).
-/// Returns nothing for a malformed program.
-template <typename ReadCbuf, typename ReadStorage>
-std::optional<u32> EvaluateHandleProgram(std::span<const u32> code, ReadCbuf&& read_cbuf,
-                                         ReadStorage&& read_storage, u32 element = 0) {
+/// words it reads, read_table(binding) the handle table word of the element being evaluated
+/// (nothing when that element is outside the table), and element is the descriptor array element
+/// computed (HandleOp::Index). Returns nothing for a malformed program or an element outside its
+/// table. A program that reads no handle table can use EvaluateHandleProgram instead.
+template <typename ReadCbuf, typename ReadStorage, typename ReadTable>
+std::optional<u32> EvaluateHandleProgramWithTable(std::span<const u32> code, ReadCbuf&& read_cbuf,
+                                                  ReadStorage&& read_storage, ReadTable&& read_table,
+                                                  u32 element = 0) {
     std::array<u32, 64> stack{};
     std::array<u32, 256> slots{};
     size_t size = 0;
@@ -477,6 +494,13 @@ std::optional<u32> EvaluateHandleProgram(std::span<const u32> code, ReadCbuf&& r
         if (op == HandleOp::Storage) {
             const u32 binding = operand();
             push(read_storage(binding, pop()));
+            continue;
+        }
+        if (op == HandleOp::TableWord) {
+            const u32 binding = operand();
+            const std::optional<u32> word = read_table(binding);
+            if (!word) return std::nullopt;
+            push(*word);
             continue;
         }
         if (op == HandleOp::Neg || op == HandleOp::Not || op == HandleOp::LNot) {
@@ -537,6 +561,15 @@ std::optional<u32> EvaluateHandleProgram(std::span<const u32> code, ReadCbuf&& r
     }
     if (size != 1) return std::nullopt;
     return stack[0];
+}
+
+/// Runs a handle program that reads no handle table.
+template <typename ReadCbuf, typename ReadStorage>
+std::optional<u32> EvaluateHandleProgram(std::span<const u32> code, ReadCbuf&& read_cbuf,
+                                         ReadStorage&& read_storage, u32 element = 0) {
+    return EvaluateHandleProgramWithTable(
+        code, read_cbuf, read_storage,
+        [](u32) -> std::optional<u32> { return std::nullopt; }, element);
 }
 
 } // namespace Shader

@@ -860,6 +860,17 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         }};
         const auto read_handle{[&](const auto& desc, u32 index) {
             if (desc.handle_program != ~0U) {
+                if (VideoCommon::IsHandleTable(desc)) {
+                    // A handle table the shader indexes per invocation: element `index` of it, and
+                    // no texture for an element past the table.
+                    const std::optional<u32> element{VideoCommon::EvaluateTextureHandleElement(
+                        info, desc.handle_program, *gpu_memory, cbuf_address,
+                        device.GetStorageBufferAlignment(), index)};
+                    const u32 value{element.value_or(VideoCommon::NULL_TEXTURE_HANDLE.first)};
+                    note_computed(desc, index, value);
+                    return element ? TexturePair(*element, via_header_index)
+                                   : VideoCommon::NULL_TEXTURE_HANDLE;
+                }
                 // Read by the shader from a storage buffer: computed for this draw.
                 const u32 value{VideoCommon::EvaluateTextureHandle(
                     info, desc.handle_program, *gpu_memory, cbuf_address,
@@ -913,7 +924,8 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         if (resolve_in_full) {
             u32 texture{};
             for (const auto& desc : info.texture_descriptors) {
-                if (desc.count > 1 && desc.handle_program != ~0U) {
+                if (desc.count > 1 && desc.handle_program != ~0U &&
+                    !VideoCommon::IsHandleTable(desc)) {
                     // A table of handles the shader indexes (one shadow map per light, say), read
                     // in one go; elements repeating a sampler share its lookup. A pipeline with
                     // handle programs never takes the texture memo (texture_memo_eligible).
@@ -1299,6 +1311,7 @@ bool GraphicsPipeline::ComputedHandlesChanged() const {
         const Shader::Info& info{stage_infos[handle.stage]};
         const auto& cbufs{maxwell3d->state.shader_stages[handle.stage].const_buffers};
         u32 program{};
+        bool handle_table{};
         switch (handle.kind) {
         case TextureBuffer:
             program = info.texture_buffer_descriptors[handle.descriptor].handle_program;
@@ -1308,23 +1321,36 @@ bool GraphicsPipeline::ComputedHandlesChanged() const {
             break;
         case Texture:
             program = info.texture_descriptors[handle.descriptor].handle_program;
+            handle_table = VideoCommon::IsHandleTable(info.texture_descriptors[handle.descriptor]);
             break;
         default:
             program = info.image_descriptors[handle.descriptor].handle_program;
             break;
         }
-        // Each element as ConfigureImpl computes it (EvaluateTextureHandles gives the values
-        // EvaluateTextureHandle does, reading the words the elements share once).
+        // Each element as ConfigureImpl computes it.
         bool changed{};
-        VideoCommon::EvaluateTextureHandles(
-            info, program, *gpu_memory,
-            [&](u32 cbuf) -> GPUVAddr {
-                return cbuf < cbufs.size() && cbufs[cbuf].enabled ? cbufs[cbuf].address
-                                                                  : GPUVAddr{};
-            },
-            device.GetStorageBufferAlignment(), handle.count, [&](u32 element, u32 value) {
-                changed |= value != delta_computed_values[handle.first_value + element];
-            });
+        const auto cbuf_address = [&](u32 cbuf) -> GPUVAddr {
+            return cbuf < cbufs.size() && cbufs[cbuf].enabled ? cbufs[cbuf].address : GPUVAddr{};
+        };
+        if (handle_table) {
+            // A handle table's elements read the table itself (EvaluateTextureHandleElement),
+            // not the words the elements share.
+            for (u32 element = 0; element < handle.count; ++element) {
+                const std::optional<u32> value{VideoCommon::EvaluateTextureHandleElement(
+                    info, program, *gpu_memory, cbuf_address,
+                    device.GetStorageBufferAlignment(), element)};
+                changed |= value.value_or(VideoCommon::NULL_TEXTURE_HANDLE.first) !=
+                           delta_computed_values[handle.first_value + element];
+            }
+        } else {
+            // EvaluateTextureHandles gives the values EvaluateTextureHandle does, reading the
+            // words the elements share once.
+            VideoCommon::EvaluateTextureHandles(
+                info, program, *gpu_memory, cbuf_address, device.GetStorageBufferAlignment(),
+                handle.count, [&](u32 element, u32 value) {
+                    changed |= value != delta_computed_values[handle.first_value + element];
+                });
+        }
         if (changed) {
             return true;
         }

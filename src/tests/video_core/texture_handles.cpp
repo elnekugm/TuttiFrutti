@@ -482,6 +482,101 @@ struct HandleTestMemory {
 };
 } // namespace
 
+TEST_CASE("A handle from a table at an offset no index word gives is a handle table",
+          "[video_core][texture_handles]") {
+    // The offset is a per-invocation word plus a constant, with no scale for the index
+    // mechanism: the table itself becomes the array (HandleOp::TableWord), indexed by the
+    // load's own byte offset. Kirby Air Riders' light probes read their handles this way, with
+    // the sampler bits ORed in from a constant buffer word.
+    for (const bool with_sampler : {false, true}) {
+        CAPTURE(with_sampler);
+        HandleProgram shader;
+        auto& info = shader.program.info;
+        info.storage_buffers_descriptors.push_back(
+            {.cbuf_index = 0, .cbuf_offset = 0x60, .count = 1, .is_written = false}); // table
+        info.storage_buffers_descriptors.push_back(
+            {.cbuf_index = 0, .cbuf_offset = 0x50, .count = 1, .is_written = false}); // per-thread
+        shader.env.cbuf_values = {{{0, 0}, 0xabc}, {{0, 0x68}, 0x18}, {{0, 0xa0}, 0x20000000}};
+        const Value thread{shader.Emit(Opcode::GetRegister, {Value{IR::Reg::R0}})};
+        const Value set{shader.Emit(Opcode::LoadStorage32, {Value{1U}, thread})};
+        const Value offset{shader.Add(set, Value{4U})};
+        const Value word{shader.Emit(Opcode::LoadStorage32, {Value{0U}, offset})};
+        const Value handle{
+            with_sampler
+                ? Value{shader.Emit(Opcode::BitwiseOr32,
+                                    {word, shader.Emit(Opcode::GetCbufU32, {Value{0U}, Value{0xa0U}})})}
+                : word};
+        auto& sample{shader.Sample(handle)};
+        shader.Run();
+
+        const auto& descriptor{shader.Descriptor(sample)};
+        REQUIRE(descriptor.handle_program != ~0U);
+        CHECK(VideoCommon::IsHandleTable(descriptor));
+        CHECK(descriptor.count == 6 + 1 + 16);
+        CHECK(descriptor.size_shift == 2);
+        // The instruction indexes the array with its own byte offset into the table, shifted to a
+        // word of 4 bytes.
+        REQUIRE_FALSE(sample.Arg(0).IsEmpty());
+        const auto* selection = sample.Arg(0).InstRecursive();
+        REQUIRE(selection->GetOpcode() == Opcode::UMin32);
+        CHECK(selection->Arg(1).U32() == descriptor.count - 1);
+        const auto* index = selection->Arg(0).InstRecursive();
+        REQUIRE(index->GetOpcode() == Opcode::ShiftRightLogical32);
+        CHECK(index->Arg(0).Resolve() == offset.Resolve());
+        CHECK(index->Arg(1).U32() == 2);
+
+        // The table 4 bytes past a 16-byte boundary: element 0 is before it, 1-6 are its words.
+        constexpr GPUVAddr cbuf = 0x1000;
+        HandleTestMemory memory;
+        memory.words[cbuf + 0x60] = 0x20d4;
+        memory.words[cbuf + 0x68] = 0x18;
+        memory.words[cbuf + 0xa0] = 0x20000000;
+        for (u32 i = 0; i < 6; ++i) {
+            memory.words[0x20d4 + i * 4] = 8 + i;
+        }
+        const auto cbuf_address = [](u32 index) -> GPUVAddr { return index == 0 ? cbuf : 0; };
+        const auto element = [&](u32 i) {
+            return VideoCommon::EvaluateTextureHandleElement(info, descriptor.handle_program,
+                                                             memory, cbuf_address, 16, i);
+        };
+        const u32 sampler_bits = with_sampler ? 0x20000000U : 0U;
+        CHECK_FALSE(element(0).has_value());
+        CHECK(element(1) == std::optional<u32>{8U | sampler_bits});
+        CHECK(element(6) == std::optional<u32>{13U | sampler_bits});
+        CHECK_FALSE(element(7).has_value());
+        CHECK_FALSE(element(descriptor.count - 1).has_value());
+    }
+}
+
+TEST_CASE("Kirby's light-probe handle is a descriptor array, not the sampler word", "[video_core][texture_handles]") {
+    // Kirby Air Riders' light-probe compute: each thread reads its set number from one buffer,
+    // then its texture handle from a table word at set * 12 + 4, with the sampler bits ORed in
+    // from a constant buffer word. The constant buffer search finds that sampler word alone (a
+    // handle the shader loads per invocation is skipped), so the computed array must win.
+    HandleProgram shader;
+    shader.env.cbuf_values = {{{0, 0}, 0xabc}, {{0, 0xa0}, 0x20000000}};
+    const Value thread{shader.Emit(Opcode::GetRegister, {Value{IR::Reg::R0}})};
+    const Value set{shader.Emit(Opcode::LoadStorage32, {Value{1U}, thread})};
+    const Value offset{shader.Add(shader.Emit(Opcode::IMul32, {set, Value{12U}}), Value{4U})};
+    const Value word{shader.Emit(Opcode::LoadStorage32, {Value{0U}, offset})};
+    const Value handle{shader.Emit(
+        Opcode::BitwiseOr32,
+        {word, shader.Emit(Opcode::GetCbufU32, {Value{0U}, Value{0xa0U}})})};
+    auto& sample{shader.Sample(handle)};
+    shader.Run();
+
+    const auto& descriptor{shader.Descriptor(sample)};
+    CHECK(descriptor.handle_program != ~0U);
+    CHECK_FALSE(descriptor.handle_table);
+    CHECK(descriptor.count == 64);
+    // Each instruction indexes the array with the light index it read, clamped to the array.
+    REQUIRE_FALSE(sample.Arg(0).IsEmpty());
+    const auto* selection = sample.Arg(0).InstRecursive();
+    REQUIRE(selection->GetOpcode() == Opcode::UMin32);
+    CHECK(selection->Arg(0).Resolve() == set.Resolve());
+    CHECK(selection->Arg(1).U32() == 63);
+}
+
 TEST_CASE("Handle tables are read for every element at once", "[video_core][texture_handles]") {
     constexpr GPUVAddr cbuf = 0x1000;
     HandleTestMemory memory;

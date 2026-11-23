@@ -482,6 +482,15 @@ ComputePipeline::ConfigureResult ComputePipeline::Configure(
     }};
     const auto read_handle{[&](const auto& desc, u32 index) {
         if (desc.handle_program != ~0U) {
+            if (VideoCommon::IsHandleTable(desc)) {
+                // A handle table the shader indexes per invocation: element `index` of it, and no
+                // texture for an element past the table.
+                const std::optional<u32> element{VideoCommon::EvaluateTextureHandleElement(
+                    info, desc.handle_program, gpu_memory, cbuf_address,
+                    device.GetStorageBufferAlignment(), index)};
+                return element ? TexturePair(*element, via_header_index)
+                               : VideoCommon::NULL_TEXTURE_HANDLE;
+            }
             // Read by the shader from a storage buffer: computed for this dispatch.
             return TexturePair(VideoCommon::EvaluateTextureHandle(
                                    info, desc.handle_program, gpu_memory, cbuf_address,
@@ -524,7 +533,7 @@ ComputePipeline::ConfigureResult ComputePipeline::Configure(
     }
     u32 texture{};
     for (const auto& desc : info.texture_descriptors) {
-        if (desc.count > 1 && desc.handle_program != ~0U) {
+        if (desc.count > 1 && desc.handle_program != ~0U && !VideoCommon::IsHandleTable(desc)) {
             // A table of handles the shader indexes, read in one go; elements repeating a
             // sampler share its lookup.
             const size_t first{views.size()};

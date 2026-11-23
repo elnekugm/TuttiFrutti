@@ -1,6 +1,6 @@
 # Kirby Air Riders fixes (title `040077201BE50000`)
 
-Three ports from [Satsuma](https://gitlab.com/FilDev/Satsuma) (FilDev, GPL-3.0), which
+Ports from [Satsuma](https://gitlab.com/FilDev/Satsuma) (FilDev, GPL-3.0), which
 plays the game on its Fritchii base. Each one is on for this title only unless noted, and
 each can be turned off:
 
@@ -9,6 +9,28 @@ each can be turned off:
 | `EDEN_NX2_SSBO_WRITTEN_SIZE_WORD` | on for this title only | the size word of a written native compute pointer |
 | `EDEN_NX2_TC_KEEP_NEWEST` | on for this title only | keeping the newest image on overlapped memory |
 | `EDEN_NX2_MACRO_DMA_DRAIN` | off | the drain every macro DMA read makes after a macro whose front run failed (that drain is always on for such a macro) |
+
+## Light probes read per invocation (dark riders)
+
+The riders are lit by light probes a compute pass fills each frame. That pass picks each
+thread's three textures from a 6-word handle table in memory, by a set number it reads per
+thread (`set * 12 + 0/4/8`), with the sampler bits ORed in from a constant buffer word.
+
+The constant buffer search that names the texture of a bindless handle skips memory loads,
+so it found that sampler word alone and bound it as the whole handle (texture 0): the pass
+found no light, wrote black probes, and the ambient light came out black (Fil's RenderDoc
+capture, frame 1470). The handle program builder had already made the earlier port of
+jpkto's descriptor arrays (Ocarina of Time's light tables, `bd0171f7b9`) able to turn such
+a table word into an array, but the search's word won before the builder ran.
+
+Now a handle that depends on a memory load but tracks to a constant buffer word is computed
+instead, and a computed *array* (a descriptor the shader indexes per invocation) is kept:
+this title reads a 64-element array of the table's handles, indexed by the light's set
+number. A handle whose offset no index word gives also reads the table itself
+(`HandleOp::TableWord`, Satsuma's "Texture handles read per invocation from a handle
+table"), so the array is still bound when the index mechanism finds nothing. No texture is
+bound for an element past the table. Handles that stay a single value keep the word the
+search found, as before.
 
 ## Written native compute storage bindings take their size word
 
