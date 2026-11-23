@@ -52,6 +52,24 @@ shader, also at 2 MiB-aligned addresses). What is left there is a GPU trace: the
 bad records are written by one of the six compute dispatches that fill those
 pages, and only the memory itself names which.
 
+## The loop safety counter is set again where its loop exits
+
+The SPIR-V emitter gives every loop a private counter that starts at 8192 and is
+decremented at each back-edge, so a broken list truncates instead of hanging the
+GPU. Nothing set it back when the loop exited: a loop entered again — a loop
+nested in another one is entered on every outer iteration — got only what was
+left of the count over the whole dispatch. Once that ran out, the loop stopped
+early, the records it never wrote kept vertex-like data, and the macros read
+those words as draw counts: the chain at the top of this page. Running with the
+checks off does not fix it, because then the walk never ends at all (it hangs
+instead of faulting), which is why that switch makes this game worse.
+
+`Traverse` now stores the whole count back into a loop's counter at the block the
+loop merges to, so every entry of the loop starts with the full count. Ported
+from Lichii `4ad3a9d801` (zortos293), by way of Satsuma and Nemyu 0.1.8: neither
+our base nor upstream `nx2` had it. `src/tests/video_core/loop_safety_counter.cpp`
+checks that each of two loops emits its decrement and its reset.
+
 ## Light probes read per invocation (dark riders)
 
 Ports from [Satsuma](https://gitlab.com/FilDev/Satsuma) (FilDev, GPL-3.0), which
@@ -79,12 +97,18 @@ a table word into an array, but the search's word won before the builder ran.
 
 Now a handle that depends on a memory load but tracks to a constant buffer word is computed
 instead, and a computed *array* (a descriptor the shader indexes per invocation) is kept:
-this title reads a 64-element array of the table's handles, indexed by the light's set
-number. A handle whose offset no index word gives also reads the table itself
-(`HandleOp::TableWord`, Satsuma's "Texture handles read per invocation from a handle
-table"), so the array is still bound when the index mechanism finds nothing. No texture is
-bound for an element past the table. Handles that stay a single value keep the word the
-search found, as before.
+this title reads the table's handles indexed by the light's set number. A handle whose offset
+no index word gives also reads the table itself (`HandleOp::TableWord`, Satsuma's "Texture
+handles read per invocation from a handle table"), so the array is still bound when the index
+mechanism finds nothing. No texture is bound for an element past the table. Handles that stay a
+single value keep the word the search found, as before.
+
+That array is 256 elements (`HANDLE_TABLE_MAX`), not the number of words the table had while
+the shader was translated. The game keeps the shader and hands it a longer table on a bigger
+map: 8 sets of 3 light volume textures in the menus, 26 sets on Waveflow Waters. Sized from
+the short table, every element past the array's end read the array's last texture — a distance
+texture as irradiance — and objects glowed white (Satsuma's fix: the arrays "go up to 256
+entries now"). Each draw fills only the words the table has; the others get no texture.
 
 ## Written native compute storage bindings take their size word
 
