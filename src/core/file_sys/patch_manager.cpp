@@ -471,21 +471,28 @@ constexpr auto TEX_GAP_RECORDS = [] {
 }();
 
 // The local depth shadow atlas (scenery and NPC shadows, sampled in the Market) is a D16
-// 12288x12288 image (288 MiB) sized by two immediates: movz w3/w4, #0x3000 -> #0x1800 makes it
-// 6144x6144 (72 MiB), #0xC00 3072x3072 (18 MiB).
+// 12288x12288 image (288 MiB) sized by two immediates: movz w3/w4, #size. The extent is a 16-bit
+// immediate, so the quality setting picks any size; the atlas is square.
 constexpr std::array<u8, 4> LOCAL_SHADOW_WIDTH_ORIGINAL{0x03, 0x00, 0x86, 0x52};
 constexpr std::array<u8, 4> LOCAL_SHADOW_HEIGHT_ORIGINAL{0x04, 0x00, 0x86, 0x52};
-constexpr std::array<u8, 4> LOCAL_SHADOW_WIDTH_HALF{0x03, 0x00, 0x83, 0x52};
-constexpr std::array<u8, 4> LOCAL_SHADOW_HEIGHT_HALF{0x04, 0x00, 0x83, 0x52};
-constexpr std::array<u8, 4> LOCAL_SHADOW_WIDTH_QUARTER{0x03, 0x80, 0x81, 0x52};
-constexpr std::array<u8, 4> LOCAL_SHADOW_HEIGHT_QUARTER{0x04, 0x80, 0x81, 0x52};
-constexpr std::array LOCAL_SHADOW_HALF_RECORDS{
-    BuiltinPatchRecord{0xC30C24, LOCAL_SHADOW_WIDTH_HALF, LOCAL_SHADOW_WIDTH_ORIGINAL},
-    BuiltinPatchRecord{0xC30C2C, LOCAL_SHADOW_HEIGHT_HALF, LOCAL_SHADOW_HEIGHT_ORIGINAL},
-};
-constexpr std::array LOCAL_SHADOW_QUARTER_RECORDS{
-    BuiltinPatchRecord{0xC30C24, LOCAL_SHADOW_WIDTH_QUARTER, LOCAL_SHADOW_WIDTH_ORIGINAL},
-    BuiltinPatchRecord{0xC30C2C, LOCAL_SHADOW_HEIGHT_QUARTER, LOCAL_SHADOW_HEIGHT_ORIGINAL},
+
+/// `movz w<register_index>, #size` in little-endian bytes (AArch64: 0x52800000 | imm16 << 5 | Rd).
+constexpr std::array<u8, 4> LocalShadowExtent(u32 register_index, u32 size) {
+    const u32 instruction = 0x52800000U | (register_index & 0x1FU) | ((size & 0xFFFFU) << 5);
+    return {static_cast<u8>(instruction), static_cast<u8>(instruction >> 8),
+            static_cast<u8>(instruction >> 16), static_cast<u8>(instruction >> 24)};
+}
+
+/// The two records that size the atlas to `Size` in both extents (the original bytes are checked
+/// before either is written).
+template <u32 Size>
+struct LocalShadowAtlas {
+    static constexpr std::array<u8, 4> Width = LocalShadowExtent(3, Size);
+    static constexpr std::array<u8, 4> Height = LocalShadowExtent(4, Size);
+    static constexpr std::array Records{
+        BuiltinPatchRecord{0xC30C24, Width, LOCAL_SHADOW_WIDTH_ORIGINAL},
+        BuiltinPatchRecord{0xC30C2C, Height, LOCAL_SHADOW_HEIGHT_ORIGINAL},
+    };
 };
 
 // Super Mario Bros. Wonder's frame-rate controller picks present interval 2 from its second frame
@@ -593,22 +600,38 @@ constexpr std::array BUILTIN_PATCHES{
         .records = RENDER_ULTRA_RECORDS,
         .dlss_quality = Settings::NvidiaDlssQuality::UltraPerformance,
     },
-    // The Ocarina local shadow size setting: Full leaves the atlas alone.
+    // The Ocarina shadow quality setting: Full leaves the atlas alone.
     BuiltinPatch{
-        .name = "Local shadow size Half (built-in)",
+        .name = "Local shadow size High (built-in)",
         .title_id = 0x0400486024DEC000,
         .module = "main",
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
-        .records = LOCAL_SHADOW_HALF_RECORDS,
+        .records = LocalShadowAtlas<9216>::Records,
+        .shadow_size = Settings::OcarinaShadowSize::ThreeQuarters,
+    },
+    BuiltinPatch{
+        .name = "Local shadow size Medium (built-in)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = LocalShadowAtlas<6144>::Records,
         .shadow_size = Settings::OcarinaShadowSize::Half,
     },
     BuiltinPatch{
-        .name = "Local shadow size Quarter (built-in)",
+        .name = "Local shadow size Low (built-in)",
         .title_id = 0x0400486024DEC000,
         .module = "main",
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
-        .records = LOCAL_SHADOW_QUARTER_RECORDS,
+        .records = LocalShadowAtlas<3072>::Records,
         .shadow_size = Settings::OcarinaShadowSize::Quarter,
+    },
+    BuiltinPatch{
+        .name = "Local shadow size Minimal (built-in)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = LocalShadowAtlas<1536>::Records,
+        .shadow_size = Settings::OcarinaShadowSize::Eighth,
     },
     BuiltinPatch{
         .name = "60 FPS (built-in)",

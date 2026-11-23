@@ -326,6 +326,57 @@ TEST_CASE("Wonder Switch 2 Edition 60 FPS pins its rate and interval together", 
         REQUIRE(manager.PatchNSO(nso, "main") == nso);
     }
 }
+TEST_CASE("Ocarina's shadow quality patches both extents of the local shadow atlas",
+          "[patch_manager]") {
+    // movz w3, #size / movz w4, #size: the atlas is square and both extents are 16-bit immediates.
+    const auto movz = [](u32 reg, u32 size) { return 0x52800000U | reg | (size << 5); };
+    struct Quality {
+        Settings::OcarinaShadowSize value;
+        u32 extent;
+    };
+    constexpr std::array qualities{
+        Quality{Settings::OcarinaShadowSize::ThreeQuarters, 9216},
+        Quality{Settings::OcarinaShadowSize::Half, 6144},
+        Quality{Settings::OcarinaShadowSize::Quarter, 3072},
+        Quality{Settings::OcarinaShadowSize::Eighth, 1536},
+    };
+    constexpr size_t WidthOffset = sizeof(Loader::NSOHeader) + 0xC30C24;
+    constexpr size_t HeightOffset = sizeof(Loader::NSOHeader) + 0xC30C2C;
+    PatchManagerTestContext context;
+    const auto manager = context.Manager(OcarinaTitleId);
+    Settings::values.disabled_addons.erase(OcarinaTitleId);
+    const auto saved = Settings::values.ocarina_local_shadow_size.GetValue();
+    SCOPE_EXIT {
+        Settings::values.ocarina_local_shadow_size.SetValue(saved);
+        Settings::values.disabled_addons.erase(OcarinaTitleId);
+    };
+    const auto make = [&movz] {
+        std::vector<u8> nso(HeightOffset + sizeof(u32));
+        Loader::NSOHeader header{};
+        header.magic = Common::MakeMagic('N', 'S', 'O', '0');
+        header.build_id = OcarinaBuildId;
+        std::memcpy(nso.data(), &header, sizeof(header));
+        const u32 width = movz(3, 12288);  // movz w3, #0x3000, the game's own extent
+        const u32 height = movz(4, 12288); // movz w4, #0x3000
+        std::memcpy(nso.data() + WidthOffset, &width, sizeof(width));
+        std::memcpy(nso.data() + HeightOffset, &height, sizeof(height));
+        return nso;
+    };
+
+    SECTION("Full leaves the atlas alone") {
+        Settings::values.ocarina_local_shadow_size.SetValue(Settings::OcarinaShadowSize::Full);
+        REQUIRE(manager.PatchNSO(make(), "main") == make());
+    }
+    for (const auto& [value, extent] : qualities) {
+        SECTION("Picks an extent of " + std::to_string(extent)) {
+            Settings::values.ocarina_local_shadow_size.SetValue(value);
+            const auto patched = manager.PatchNSO(make(), "main");
+            CHECK(WordAt(patched, WidthOffset) == movz(3, extent));
+            CHECK(WordAt(patched, HeightOffset) == movz(4, extent));
+        }
+    }
+}
+
 TEST_CASE("Built-in Max Resolution patch defers to a user mod at the same offset",
           "[patch_manager]") {
     SECTION("A different word from the mod is kept") {

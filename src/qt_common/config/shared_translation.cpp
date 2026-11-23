@@ -199,10 +199,12 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Replaces Ocarina of Time's native upscaler using scene depth and camera motion. "
               "Works on any supported Vulkan GPU. NVIDIA DLSS takes precedence when enabled and "
               "available. RCAS Sharpness controls sharpening. Takes effect when a game starts."));
-    INSERT(Settings, ocarina_local_shadow_size, tr("Local shadow size"),
-           tr("Size of the shadow map for nearby objects in Ocarina of Time's towns. Half saves "
-              "about 216 MB of video memory, Quarter about 270 MB. Shadows look nearly the same. "
-              "Restart the game to apply."));
+    INSERT(Settings, ocarina_local_shadow_size, tr("Shadow quality"),
+           tr("Size of the shadow map for nearby objects in Ocarina of Time's towns. Each step "
+              "down saves video memory (Full to Medium is 216 MB) and softens the shadows a "
+              "little: High is 9216x9216 (162 MB), Medium 6144x6144 (72 MB), Low 3072x3072 "
+              "(18 MB) and Minimal 1536x1536 (4.5 MB); Full is the game's own 12288x12288 "
+              "(288 MB). Restart the game to apply."));
     INSERT(Settings, ocarina_resolution, tr("Output resolution (TV)"),
            tr("Ocarina of Time renders its 3D at up to 1440p docked and upscales it with its own "
               "passes. This picks the resolution those land on: 1080p, 1440p (the game's own) or "
@@ -767,8 +769,10 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
     translations->insert({Settings::EnumMetadata<Settings::OcarinaShadowSize>::Index(),
                           {
                               PAIR(OcarinaShadowSize, Full, tr("Full (12288x12288)")),
-                              PAIR(OcarinaShadowSize, Half, tr("Half (6144x6144)")),
-                              PAIR(OcarinaShadowSize, Quarter, tr("Quarter (3072x3072)")),
+                              PAIR(OcarinaShadowSize, ThreeQuarters, tr("High (9216x9216)")),
+                              PAIR(OcarinaShadowSize, Half, tr("Medium (6144x6144)")),
+                              PAIR(OcarinaShadowSize, Quarter, tr("Low (3072x3072)")),
+                              PAIR(OcarinaShadowSize, Eighth, tr("Minimal (1536x1536)")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::OcarinaResolution>::Index(),
                           {
