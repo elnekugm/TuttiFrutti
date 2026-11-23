@@ -25,6 +25,19 @@ permissions:
 env:
   PGO_LLVM_VERSION: "23"
 
+  # The build variants, one per line: platform, runner, CMake preset, PGO profile. A dev build can
+  # name one or a few in the `platforms` input; a published release leaves that empty and builds all
+  # of them, and the release job checks that it found all eight packages.
+  RELEASE_PLATFORMS: |
+    linux-x86_64-pgo ubuntu-24.04 v3 eglantine.profdata
+    linux-x86_64-znver3-pgo ubuntu-24.04 zen3 eglantine.profdata
+    linux-x86_64-znver4-pgo ubuntu-24.04 zen4 eglantine.profdata
+    linux-x86_64-znver5-pgo ubuntu-24.04 zen5 eglantine.profdata
+    windows-x86_64-pgo windows-2022 v3 lichii-windows.profdata
+    windows-x86_64-znver3-pgo windows-2022 zen3 lichii-windows.profdata
+    windows-x86_64-znver4-pgo windows-2022 zen4 lichii-windows.profdata
+    windows-x86_64-znver5-pgo windows-2022 zen5 lichii-windows.profdata
+
 # A running build is never cancelled: it finishes and publishes. A push meanwhile queues one build;
 # a later push replaces it, so the newest commit builds as soon as the running one is done.
 concurrency:
@@ -37,7 +50,41 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    outputs:
+      matrix: ${{ steps.platforms.outputs.matrix }}
     steps:
+      # The build jobs' matrix, so a dev build can compile one platform instead of eight. Plain
+      # shell: a job's `if` cannot see `matrix`, and a static `include` list cannot be filtered by
+      # an input.
+      - name: Choose the platforms
+        id: platforms
+        shell: bash
+        env:
+          WANTED: ${{ inputs.platforms }}
+        run: |
+          set -euo pipefail
+          wanted="${WANTED// /}"
+          matrix='['
+          first=1
+          while read -r platform runner preset profile; do
+            if [[ -z "${platform:-}" ]]; then
+              continue
+            fi
+            if [[ -n "$wanted" && ",$wanted," != *",$platform,"* ]]; then
+              continue
+            fi
+            if [[ "$first" == 0 ]]; then
+              matrix+=','
+            fi
+            matrix+="{\"platform\":\"$platform\",\"runner\":\"$runner\",\"preset\":\"$preset\",\"profile\":\"$profile\"}"
+            first=0
+          done <<< "$RELEASE_PLATFORMS"
+          matrix+=']'
+          if [[ "$matrix" == '[]' ]]; then
+            echo "::error::no platform matches '${wanted}'"
+            exit 1
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
       - name: Prepare release tag
         if: inputs.publish_release
         shell: bash
@@ -67,49 +114,14 @@ jobs:
   build:
     name: ${{ matrix.platform }}
     needs: prepare-release
-    # A dev build can name one or a few platforms; a published release leaves this empty and builds
-    # all eight (the release job checks that it found all of them).
-    if: ${{ inputs.platforms == '' || contains(inputs.platforms, matrix.platform) }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # Clean public builds from fresh runners and empty build directories: Windows and Linux,
-          # each for x86-64-v3 (AVX2) and for AMD Zen 3, Zen 4 and Zen 5 (znver3/4/5), all Release,
-          # built with the checked-in PGO profile and ThinLTO.
-          - platform: linux-x86_64-pgo
-            runner: ubuntu-24.04
-            preset: v3
-            profile: eglantine.profdata
-          - platform: linux-x86_64-znver3-pgo
-            runner: ubuntu-24.04
-            preset: zen3
-            profile: eglantine.profdata
-          - platform: linux-x86_64-znver4-pgo
-            runner: ubuntu-24.04
-            preset: zen4
-            profile: eglantine.profdata
-          - platform: linux-x86_64-znver5-pgo
-            runner: ubuntu-24.04
-            preset: zen5
-            profile: eglantine.profdata
-          - platform: windows-x86_64-pgo
-            runner: windows-2022
-            preset: v3
-            profile: lichii-windows.profdata
-          - platform: windows-x86_64-znver3-pgo
-            runner: windows-2022
-            preset: zen3
-            profile: lichii-windows.profdata
-          - platform: windows-x86_64-znver4-pgo
-            runner: windows-2022
-            preset: zen4
-            profile: lichii-windows.profdata
-          - platform: windows-x86_64-znver5-pgo
-            runner: windows-2022
-            preset: zen5
-            profile: lichii-windows.profdata
+      # Clean public builds from fresh runners and empty build directories: Windows and Linux, each
+      # for x86-64-v3 (AVX2) and for AMD Zen 3, Zen 4 and Zen 5 (znver3/4/5), all Release, built with
+      # the checked-in PGO profile and ThinLTO. A dev build can name a subset (see RELEASE_PLATFORMS
+      # and the `platforms` input).
+      matrix: ${{ fromJSON(needs.prepare-release.outputs.matrix) }}
 
     steps:
       - name: Check out source
