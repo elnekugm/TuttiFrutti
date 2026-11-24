@@ -1976,6 +1976,13 @@ TEST_CASE("A DMA copy's destination is read as the copy left it", "[buffer_ports
     f.cache->OnCPUWrite(0x20800, 0x100);
     REQUIRE(f.cache->DMACopy(0x208000, 0x200000, 0x100));
     REQUIRE(Access::Pending(*f.cache, 0x20000, 0x100));
+    // A copy from bytes no GPU write touched rewrites its whole destination, so the destination is
+    // GPU-written from then on: the buffer cache knows it holds the copy's bytes, and on a Switch 2
+    // title the front reads a copied command list page through the GPU's copy
+    // (DmaPusher::IsGpuWrittenCommands) instead of the pre-copy words in guest memory.
+    REQUIRE(f.cache->DMACopy(0x208000, 0x20F000, 0x100));
+    REQUIRE(f.cache->IsRegionGpuModified(0x2F000, 0x100));
+    REQUIRE(Tegra::Nx2IsGpuWritten(0x2F000));
 }
 
 namespace {

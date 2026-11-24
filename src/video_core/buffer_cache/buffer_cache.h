@@ -1517,24 +1517,23 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     auto mirror = [&](DAddr base_address, DAddr base_address_end) {
         const u64 size = base_address_end - base_address;
         const DAddr diff = base_address - *cpu_src_address;
-        const DAddr new_base_address = *cpu_dest_address + diff;
-        tmp_intervals.push_back({new_base_address, size});
-        if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
-            Tegra::Nx2MarkGpuWritten(new_base_address, size);
-        }
-        QueueFenceDownload(new_base_address, size);
+        tmp_intervals.push_back({*cpu_dest_address + diff, size});
     };
     gpu_modified_ranges.ForEachInRange(*cpu_src_address, amount, mirror);
     // This subtraction in this order is important for overlapping copies.
     gpu_modified_ranges.Subtract(*cpu_dest_address, amount);
-    // The copy rewrote every byte of the destination, and it is a GPU command: guest memory gets
-    // those bytes at the fence. A GPU-modified source queued its own per-range downloads in mirror
-    // above; a plain one queued none, which left the guest reading the pre-copy bytes of the page
-    // (Kirby Air Riders' list pages, whose stale words its macros then read as draw counts).
+    // The copy engine rewrote every byte of the destination, and it is a GPU command: the whole
+    // destination is GPU-written from here on, not only the bytes whose source range was. Without
+    // this a Switch 2 title's copied command list page was not marked GPU-written, so the front
+    // read it from guest memory (DmaPusher::IsGpuWrittenCommands) and its macros parsed the
+    // page's pre-copy words; and no path saw the destination as holding GPU data at all.
+    gpu_modified_ranges.Add(*cpu_dest_address, amount);
+    if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+        Tegra::Nx2MarkGpuWritten(*cpu_dest_address, amount);
+    }
     QueueFenceDownload(*cpu_dest_address, amount);
     const bool has_new_downloads = tmp_intervals.size() != 0;
     for (const auto& pair : tmp_intervals) {
-        gpu_modified_ranges.Add(pair.first, pair.second);
         NoteReadBackWrite(pair.first, pair.second);
     }
     // The copy rewrites all of the destination, not only the bytes that came from GPU-written
@@ -1547,6 +1546,7 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     dest_buffer.MarkUsage(copy.dst_offset, copy.size);
     runtime.CopyBuffer(dest_buffer, src_buffer, copies, true);
     if (has_new_downloads) {
+        memory_tracker.MarkRegionAsGpuModified(*cpu_dest_address, amount);
         const bool should_sync = Settings::IsGPUFenceBehaviorBalanced() || Settings::IsGPUFenceBehaviorAccurate();
         if (should_sync) {
             runtime.Finish();
