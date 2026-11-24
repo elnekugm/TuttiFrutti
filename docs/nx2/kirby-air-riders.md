@@ -52,6 +52,41 @@ shader, also at 2 MiB-aligned addresses). What is left there is a GPU trace: the
 bad records are written by one of the six compute dispatches that fill those
 pages, and only the memory itself names which.
 
+## A DMA copy's whole destination is GPU-written
+
+`BufferCache::DMACopy` rewrites the destination through the copy engine, but it
+only recorded the ranges whose *source* was GPU-modified: the destination was
+subtracted from `gpu_modified_ranges` (the subtraction overlapping copies need)
+and only the mirrored source ranges were added back. A copy from plain
+(CPU-written) bytes therefore left the destination recorded as not GPU-written at
+all, while its buffer did hold the copy's bytes.
+
+Kirby Air Riders copies its command lists that way. With `EDEN_NX2_READ_CHECK`
+the check found the page milliseconds before the device loss, and the log line
+`Read download check ... differs from a synchronous flush ... gpu-modified now
+true` showed the range was reached but not marked where the flush looks. On a
+Switch 2 title the destination is also what `DmaPusher::IsGpuWrittenCommands`
+asks about: unmarked, the front parsed a copied list page out of guest memory
+instead of the GPU's copy, and its macros read the page's pre-copy words as draw
+counts.
+
+The fix marks the whole destination (`gpu_modified_ranges`, plus
+`Tegra::Nx2MarkGpuWritten` for a Switch 2 title) and keeps a downloaded copy of
+it, as `MarkWrittenBuffer` does for a shader store. The source's per-range
+downloads still come from the mirrored ranges. Pending in-game confirmation
+(build `1a3d7adcf3`).
+
+### A fence download of it queues nothing on a Switch 2 title
+
+`QueueFenceDownload` has two paths. `AsyncBufferDownloads()` queues the whole
+range; that path is off for a Switch 2 title (native tiling), by design, because
+downloading every GPU write at its fence copied 250-330 MB/s back. The other path
+queues only the parts already marked Preflushable and arms read traps for the
+rest. So `QueueFenceDownload(*cpu_dest_address, amount)` alone delivers nothing
+on Kirby: `EDEN_NX2_BUFFER_DOWNLOADS=1` forces the first path, which proved the
+mechanism but ran out of host memory at 53 s (`No memory for a 85541824 byte
+staging buffer`) because it turns on downloads for *every* GPU write.
+
 ## The loop safety counter is set again where its loop exits
 
 The SPIR-V emitter gives every loop a private counter that starts at 8192 and is
