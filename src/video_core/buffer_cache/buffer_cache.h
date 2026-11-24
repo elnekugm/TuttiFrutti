@@ -4471,6 +4471,43 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
             // bound Fortune's Weave's DLSS input features to 266 bytes and dropped the rest.
             if (native_pointer) {
                 const u32 bare = (std::min)(memory_layout_size, static_cast<u32>(8_MiB));
+                // EDEN_NX2_SSBO_BIND_END=1 (test): a native compute pointer is bound as far as a
+                // storage buffer may reach instead of stopping at 8 MiB, so a pool the game only
+                // partly describes with a size word is still readable as a whole.
+                static const bool bind_end = [] {
+                    const char* const value = std::getenv("EDEN_NX2_SSBO_BIND_END");
+                    return value != nullptr && value[0] == '1';
+                }();
+                if (compute && bare == static_cast<u32>(8_MiB)) {
+                    // What the 8 MiB cap is what bounds, while its mapping allows more: a read past
+                    // it comes back zero. Counted and named so a shader that walks past one is
+                    // visible, with the switch below lifting the cap.
+                    static std::atomic<u64> capped{};
+                    static std::atomic<s64> capped_next{};
+                    const u64 capped_total = capped.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (capped_total <= 16) {
+                        LOG_WARNING(HW_GPU,
+                                    "Compute binding capped at 8 MiB #{}: cbuf {} written={} "
+                                    "table={} next_qword={:#x} packed={:#x} layout={:#x} "
+                                    "ssbo_addr={:#x} gpu_addr={:#x}",
+                                    capped_total, cbuf_index, is_written, table_pointer, next_qword,
+                                    packed_size, memory_layout_size, ssbo_addr, gpu_addr);
+                    } else {
+                        const s64 now = std::chrono::duration_cast<std::chrono::seconds>(
+                                            std::chrono::steady_clock::now().time_since_epoch())
+                                            .count();
+                        s64 due = capped_next.load(std::memory_order_relaxed);
+                        if (now >= due &&
+                            capped_next.compare_exchange_strong(due, now + 10,
+                                                                std::memory_order_relaxed)) {
+                            LOG_INFO(HW_GPU, "Compute bindings capped at 8 MiB: {} so far",
+                                     capped_total);
+                        }
+                    }
+                }
+                if (compute && bind_end) {
+                    return (std::min)(memory_layout_size, limit);
+                }
                 // Mario Kart World's lighting passes read past 8 MiB from theirs, inside the size
                 // word after the pointer (Eglantine #609 reads it): capped at 8 MiB those reads
                 // came back zero and lit land and characters too dark. A read-only compute binding
