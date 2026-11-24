@@ -87,6 +87,28 @@ on Kirby: `EDEN_NX2_BUFFER_DOWNLOADS=1` forces the first path, which proved the
 mechanism but ran out of host memory at 53 s (`No memory for a 85541824 byte
 staging buffer`) because it turns on downloads for *every* GPU write.
 
+## The split and stale downloads are both exonerated
+
+Two runs on top of the destination fix (`1a3d7adcf3`), both ending in the same
+device fault (`instruction pointer (fault)` plus an `invalid read` at a 2 MiB
+aligned `0x4a7600000`):
+
+- `EDEN_NX2_SPLIT=2`, the default for a Switch 2 title, macros on the front: the
+  read check was clean for the whole run (1821 downloads, 33430 KiB compared, 0
+  bytes differ, 0 GPU-modified bytes no download brought, no outdated read), and
+  the GPU was lost at 56.7 s. Guest memory was *correct* everywhere that tool
+  looks, so what faults the shader is GPU-side.
+- `EDEN_NX2_SPLIT=1`, macros on the back: lost at 37.6 s, and the check named the
+  other half of the race — `an earlier read's download brought it, and the GPU
+  wrote it since without taking it out of that download` over `0xa1a1000`, with
+  `gpu-modified now false`: a GPU write to a page an early download had landed,
+  which no path took out of that download.
+
+So neither the split nor a stale read download produces it. What faults is a
+shader reading an address built from GPU-written records, which is the
+linked-list walk of [Lichii#1693]. What is left there is a GPU trace of the
+frame, kept on the player's PC: it holds game data and shaders.
+
 ## The loop safety counter is set again where its loop exits
 
 The SPIR-V emitter gives every loop a private counter that starts at 8192 and is
