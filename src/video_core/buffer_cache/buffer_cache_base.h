@@ -1193,6 +1193,11 @@ private:
     void TakeEarlyLanded(DAddr device_addr, u64 size, Func&& func);
     void ForgetEarlyLanded(DAddr device_addr, u64 size);
 
+    /// EDEN_NX2_TRACE_PAGE=<address>: logs every path that writes, downloads or lands over that
+    /// page, with what the cache knows of it. Finds a write no path records: the read check then
+    /// serves stale bytes for it.
+    void TracePage(DAddr device_addr, u64 size, const char* what);
+
     /// A page the guest CPU read GPU writes from. Switch 2 titles read compute results back every
     /// frame, milliseconds after the dispatch that wrote them: a download recorded at the read
     /// waits for all the GPU work recorded in between. Pages read after each of their writes get

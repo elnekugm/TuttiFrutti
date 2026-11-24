@@ -242,8 +242,29 @@ void BufferCache<P>::UnmapGPUMemory(size_t as_id, GPUVAddr gpu_addr, size_t size
 }
 
 template <class P>
+void BufferCache<P>::TracePage(DAddr device_addr, u64 size, const char* what) {
+    static const std::optional<DAddr> page = []() -> std::optional<DAddr> {
+        const char* const value = std::getenv("EDEN_NX2_TRACE_PAGE");
+        if (value == nullptr) {
+            return std::nullopt;
+        }
+        return static_cast<DAddr>(std::strtoull(value, nullptr, 0));
+    }();
+    if (!page || device_addr >= *page + DEVICE_PAGESIZE || *page >= device_addr + size) {
+        return;
+    }
+    static std::atomic<u64> lines{};
+    if (lines.fetch_add(1, std::memory_order_relaxed) >= 512) {
+        return;
+    }
+    LOG_WARNING(HW_GPU, "Trace page {:#x}: {} {:#x}+{:#x} gpu_modified={}", *page, what, device_addr,
+                size, IsRegionGpuModified(device_addr, size));
+}
+
+template <class P>
 void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu_data,
                                  bool engine_write) {
+    TracePage(device_addr, size, "WriteMemory");
     Nx2NoteListHostWrite(device_addr, size);
     NoteUniformWrite(device_addr, size);
     // EDEN_NX2_READ_CHECK: a newer value where an early download landed, as ClearDownload
@@ -572,6 +593,7 @@ void BufferCache<P>::DownloadRangesMemory(std::span<const std::pair<DAddr, u64>>
 
 template <class P>
 void BufferCache<P>::DownloadMemoryForRead(DAddr device_addr, u64 size) {
+    TracePage(device_addr, size, "DownloadMemoryForRead");
     if constexpr (IS_OPENGL || !USE_MEMORY_MAPS) {
         DownloadMemory(device_addr, size);
     } else {
@@ -1041,6 +1063,7 @@ void BufferCache<P>::NoteEarlyLanded(const ReadDownload& download,
         early_landed.clear();
     }
     download.clean_ranges.ForEach([&](DAddr start, DAddr end) {
+        TracePage(start, end - start, "NoteEarlyLanded");
         Common::RangeSet<DAddr> landed;
         landed.Add(start, end - start);
         cpu_written.ForEachInRange(start, end - start, [&](DAddr lower, DAddr upper) {
@@ -1064,6 +1087,7 @@ void BufferCache<P>::NoteEarlyLanded(const ReadDownload& download,
 template <class P>
 template <typename Func>
 void BufferCache<P>::TakeEarlyLanded(DAddr device_addr, u64 size, Func&& func) {
+    TracePage(device_addr, size, "TakeEarlyLanded");
     for (DAddr page = Common::AlignDown(device_addr, DEVICE_PAGESIZE); page < device_addr + size;
          page += DEVICE_PAGESIZE) {
         const auto it = early_landed.find(page);
@@ -1125,6 +1149,7 @@ void BufferCache<P>::ForgetRewrittenEarlyLanded(DAddr device_addr, u64 size) {
 
 template <class P>
 void BufferCache<P>::ForgetEarlyLanded(DAddr device_addr, u64 size) {
+    TracePage(device_addr, size, "ForgetEarlyLanded");
     for (DAddr page = Common::AlignDown(device_addr, DEVICE_PAGESIZE); page < device_addr + size;
          page += DEVICE_PAGESIZE) {
         const auto it = early_landed.find(page);
@@ -1292,14 +1317,17 @@ void BufferCache<P>::CheckReadDownload(const ReadCheck& check,
                 ? ": an earlier read's download brought it, and the GPU wrote it since without "
                   "taking it out of that download"
                 : (result == Result::NotLanded ? ": no earlier read's download wrote it" : "");
+        TracePage(address, size, "READ CHECK MISMATCH");
         LOG_ERROR(HW_GPU,
                   "Read download check: guest memory {:#x}+{:#x} differs from a synchronous "
                   "flush ({:#04x} for {:#04x} at its start){}; {} download of [{:#x}, {:#x}), "
-                  "written to guest memory by {}",
+                  "written to guest memory by {}, gpu-modified now {}, heard write by {}",
                   address, size, found, wanted, why,
                   check.early ? "early" : (check.own.Empty() ? "read" : "check-only"),
                   check.read_begin, check.read_end,
-                  VideoCore::AsyncReadback::landing_names[static_cast<size_t>(landing)]);
+                  VideoCore::AsyncReadback::landing_names[static_cast<size_t>(landing)],
+                  IsRegionGpuModified(address, size),
+                  VideoCore::ReadCheckWrites::Find(address, size));
     };
     std::vector<u8> guest;
     std::vector<Source> sources;
@@ -1453,6 +1481,8 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     }
     const bool source_dirty = IsRegionRegistered(*cpu_src_address, amount);
     const bool dest_dirty = IsRegionRegistered(*cpu_dest_address, amount);
+    TracePage(*cpu_src_address, amount, "DMACopy source");
+    TracePage(*cpu_dest_address, amount, "DMACopy dest");
     if (!source_dirty && !dest_dirty) {
         return false;
     }
@@ -1534,6 +1564,7 @@ bool BufferCache<P>::DMAClear(GPUVAddr dst_address, u64 amount, u32 value) {
     // amount counts words: the range is checked in bytes, as it is cleared.
     const size_t size = amount * sizeof(u32);
     const bool dest_dirty = IsRegionRegistered(*cpu_dst_address, size);
+    TracePage(*cpu_dst_address, size, "DMAClear");
     if (!dest_dirty) {
         return false;
     }
@@ -2198,6 +2229,7 @@ Common::RangeSet<DAddr> BufferCache<P>::PendingCpuWriteRanges() {
 template <class P>
 void BufferCache<P>::WriteDownloadedMemory(const Common::RangeSet<DAddr>& cpu_written,
                                            DAddr device_addr, const u8* data, u64 size) {
+    TracePage(device_addr, size, "WriteDownloadedMemory");
     // EDEN_NX2_READ_CHECK: newer GPU bytes than an early download brought before.
     if (!early_landed.empty()) {
         ForgetEarlyLanded(device_addr, size);
@@ -3339,6 +3371,7 @@ void BufferCache<P>::UpdateComputeTextureBuffers() {
 
 template <class P>
 void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u32 size, bool needs_sync) {
+    TracePage(device_addr, size, "MarkWrittenBuffer");
     if constexpr (!IS_OPENGL) {
         if (needs_sync) {
             Buffer& buffer = slot_buffers[buffer_id];
