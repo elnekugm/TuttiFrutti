@@ -1527,6 +1527,11 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     gpu_modified_ranges.ForEachInRange(*cpu_src_address, amount, mirror);
     // This subtraction in this order is important for overlapping copies.
     gpu_modified_ranges.Subtract(*cpu_dest_address, amount);
+    // The copy rewrote every byte of the destination, and it is a GPU command: guest memory gets
+    // those bytes at the fence. A GPU-modified source queued its own per-range downloads in mirror
+    // above; a plain one queued none, which left the guest reading the pre-copy bytes of the page
+    // (Kirby Air Riders' list pages, whose stale words its macros then read as draw counts).
+    QueueFenceDownload(*cpu_dest_address, amount);
     const bool has_new_downloads = tmp_intervals.size() != 0;
     for (const auto& pair : tmp_intervals) {
         gpu_modified_ranges.Add(pair.first, pair.second);
@@ -1542,7 +1547,6 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     dest_buffer.MarkUsage(copy.dst_offset, copy.size);
     runtime.CopyBuffer(dest_buffer, src_buffer, copies, true);
     if (has_new_downloads) {
-        memory_tracker.MarkRegionAsGpuModified(*cpu_dest_address, amount);
         const bool should_sync = Settings::IsGPUFenceBehaviorBalanced() || Settings::IsGPUFenceBehaviorAccurate();
         if (should_sync) {
             runtime.Finish();

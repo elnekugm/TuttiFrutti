@@ -626,6 +626,15 @@ struct KeepFixture : EnvGate, BasicFixture<KeepRuntime, KeepCache> {
         Access::KeepDraw(*cache, *channel, delta, id, Ubo, UboSize);
         const auto& data = runtime.allocations.at(runtime.bound.allocation);
         REQUIRE(data.size() == UboSize);
+        if (std::memcmp(data.data(), UboBytes(), UboSize) != 0) {
+            for (u32 i = 0; i < UboSize; ++i) {
+                if (data[i] != UboBytes()[i]) {
+                    WARN("uniform differs at " << i << ": uploaded " << int(data[i]) << ", guest "
+                                               << int(UboBytes()[i]));
+                    break;
+                }
+            }
+        }
         REQUIRE(std::memcmp(data.data(), UboBytes(), UboSize) == 0);
     }
     Access::KeepCounts Counts() const {
@@ -1207,7 +1216,8 @@ TEST_CASE("Uniform keep ends at DMA copies, DMA clears and inline uploads over t
     f.Draw(&unchanged);
     REQUIRE(f.Counts().kept == 1);
 
-    // From memory no GPU wrote: the copy lands in guest memory only.
+    // From memory no GPU wrote: the copy's bytes reach guest memory at the fence, so the guest
+    // reads the copy and not what the page held before it.
     std::memset(f.bytes + 0x8000, 8, 0x10);
     REQUIRE(f.cache->DMACopy(0x108000, KeepFixture::UboGpu + 0x20, 0x10));
     f.Draw(&unchanged);
@@ -1938,6 +1948,34 @@ TEST_CASE("GPU writes to guest memory land the early downloads under them first"
     REQUIRE(f.bytes[0x1003f] == 3);
     REQUIRE(f.bytes[0x10044] == 3);
     REQUIRE(ReadWord(f, 0x20040).preemtive);
+}
+
+TEST_CASE("A DMA copy's destination is read as the copy left it", "[buffer_ports]") {
+    Fixture f;
+    const Nx2TitleScope nx2_title;
+    f.memory->Map(0x200000, 0x20000, 0x10000, Tegra::PTEKind::PITCH, true);
+    const auto id = Access::Add(*f.cache, 0x20000, 0x10000);
+    // A channel for the engines (DMACopy), as OwedFixture binds one.
+    Tegra::Control::ChannelState state{0};
+    state.memory_manager = &*f.memory;
+    state.payload.emplace(f.system, *f.memory, state);
+    std::optional<VideoCommon::BufferCacheChannelInfo> channel;
+    channel.emplace(state);
+    Access::UseChannel(*f.cache, *channel);
+    // The guest reads the page after a dispatch's write, so the next write's early download lands
+    // there: the state a command-list page is in when a DMA copy rewrites it.
+    for (u8 frame = 1; frame <= 2; ++frame) {
+        WriteByDispatch(f, id, 0x20000, 0x100, frame);
+        ReadWord(f, 0x20010);
+    }
+    f.runtime.Complete(f.runtime.submitted_tick);
+    REQUIRE(f.bytes[0x10010] == 2);
+    // A DMA copy from bytes no GPU write touched rewrites the page: the guest's next read has to
+    // download what the copy left there, not read what the page held before it.
+    std::memset(f.bytes + 0x10800, 0x77, 0x100);
+    f.cache->OnCPUWrite(0x20800, 0x100);
+    REQUIRE(f.cache->DMACopy(0x208000, 0x200000, 0x100));
+    REQUIRE(Access::Pending(*f.cache, 0x20000, 0x100));
 }
 
 namespace {
