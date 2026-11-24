@@ -236,12 +236,21 @@ void Init(QWidget* root) {
     QtCommon::Meta::RegisterMetaTypes();
 
     // build version
-    const auto branch_name = std::string(Common::g_scm_branch);
-    const auto description = std::string(Common::g_scm_desc);
     const auto build_id = std::string(Common::g_build_id);
+    // The commit without the branch it was built from: the branch names an old release line and
+    // went stale in the version string (a 1.4 branch building 1.5.1's code). A release names its
+    // tag instead, which is the whole of the description there (LICHII_BUILD_TAG).
+    std::string description{Common::g_scm_desc};
+    const std::string branch{Common::g_scm_branch};
+    if (!branch.empty() && description.size() > branch.size() &&
+        description.compare(description.size() - branch.size(), branch.size(), branch) == 0 &&
+        description[description.size() - branch.size() - 1] == '-') {
+        description.resize(description.size() - branch.size() - 1);
+    }
 
-    const auto lichii_build =
-        fmt::format("TuttiFrutti Development Build | {}-{}", branch_name, description);
+    const auto lichii_build = Common::g_is_dev_build
+                                  ? fmt::format("TuttiFrutti Development Build | {}", description)
+                                  : fmt::format("TuttiFrutti {}", description);
     const auto override_build =
         fmt::format(fmt::runtime(std::string(Common::g_title_bar_format_idle)), build_id);
     const auto lichii_build_version = override_build.empty() ? lichii_build : override_build;
