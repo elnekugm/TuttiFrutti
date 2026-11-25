@@ -663,16 +663,21 @@ Id EmitRenderArea(EmitContext& ctx) {
     }
 }
 
+// A dynamic index outside the array is undefined in SPIR-V: a driver that keeps the array in
+// scratch memory reads or writes wherever the index points and can fault the GPU (Kirby Air
+// Riders, while a race or its menu loads). Out-of-range words go to the spare word past the end.
+// Ported from Satsuma (FilDev), which took it from Orchid 98e0cd7161 through Nemyu 0.1.8.
+static Id LocalPointer(EmitContext& ctx, Id word_offset) {
+    const Id index{ctx.OpUMin(ctx.U32[1], word_offset, ctx.Const(ctx.local_memory_words))};
+    return ctx.OpAccessChain(ctx.private_u32, ctx.local_memory, index, ctx.Const(0U));
+}
+
 Id EmitLoadLocal(EmitContext& ctx, Id word_offset) {
-    const Id pointer{
-        ctx.OpAccessChain(ctx.private_u32, ctx.local_memory, word_offset, ctx.Const(0U))};
-    return ctx.OpLoad(ctx.U32[1], pointer);
+    return ctx.OpLoad(ctx.U32[1], LocalPointer(ctx, word_offset));
 }
 
 void EmitWriteLocal(EmitContext& ctx, Id word_offset, Id value) {
-    const Id pointer{
-        ctx.OpAccessChain(ctx.private_u32, ctx.local_memory, word_offset, ctx.Const(0U))};
-    ctx.OpStore(pointer, value);
+    ctx.OpStore(LocalPointer(ctx, word_offset), value);
 }
 
 } // namespace Shader::Backend::SPIRV

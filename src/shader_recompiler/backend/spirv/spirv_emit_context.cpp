@@ -640,8 +640,14 @@ void EmitContext::DefineLocalMemory(const IR::Program& program) {
         return;
     }
     const u32 num_elements{Common::DivCeil(program.local_memory_size, 4U)};
+    // One word past the end: a dynamic index outside the array is undefined in SPIR-V, and a
+    // driver that keeps the array in scratch memory reads or writes wherever the index points and
+    // can fault the GPU (Kirby Air Riders, while a race or its menu loads). Loads and stores clamp
+    // to that spare word instead; the frontend already turns an out-of-range load into zero.
+    // Ported from Satsuma (FilDev), which took it from Orchid 98e0cd7161 through Nemyu 0.1.8.
+    local_memory_words = num_elements;
     const Id element_type{TypeStruct(U32[1])};
-    const Id type{TypeArray(element_type, Const(num_elements))};
+    const Id type{TypeArray(element_type, Const(num_elements + 1))};
     const Id pointer{TypePointer(spv::StorageClass::Private, type)};
     local_memory = AddGlobalVariable(pointer, spv::StorageClass::Private);
     if (profile.supported_spirv >= 0x00010400) {

@@ -348,6 +348,7 @@ public:
     u32 render_are_member_index{};
 
     Id local_memory{};
+    u32 local_memory_words{}; ///< Without the spare word local accesses clamp to
 
     bool uses_explicit_workgroup_layout{};
     Id shared_memory_u8{};
