@@ -1020,6 +1020,18 @@ void BufferCache<P>::NoteReadBackWrite(DAddr device_addr, u64 size) {
 template <class P>
 void BufferCache<P>::RecordEarlyDownloads() {
     if constexpr (!IS_OPENGL && USE_MEMORY_MAPS) {
+        // EDEN_NX2_EARLY_DOWNLOADS=0: no speculative read-back. A page the guest reads after a
+        // GPU write is downloaded by the read's own flush instead, as builds without this
+        // machinery do (Satsuma has none of it). Kirby Air Riders left a page's pre-write bytes
+        // in guest memory through an early download that no path took out of it.
+        static const bool enabled = [] {
+            const char* const value = std::getenv("EDEN_NX2_EARLY_DOWNLOADS");
+            return value == nullptr || value[0] != '0';
+        }();
+        if (!enabled) {
+            early_pages.clear();
+            return;
+        }
         if (early_pages.empty()) {
             return;
         }
