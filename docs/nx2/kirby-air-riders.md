@@ -52,6 +52,44 @@ shader, also at 2 MiB-aligned addresses). What is left there is a GPU trace: the
 bad records are written by one of the six compute dispatches that fill those
 pages, and only the memory itself names which.
 
+## Dark riders and a dim menu: constant-buffer handle tables
+
+The scene was uniformly about 1.5x darker than Satsuma's and had lost its
+specular highlights (the menu's cards went grey). Not a texture, not the probes,
+not the shader translation:
+
+- the 155 native programs both builds compiled for that menu were **byte for
+  byte identical**;
+- the same passes and the same 23 compute dispatches ran in both;
+- the 33x33x33 light-probe volumes had identical statistics (mean 0.5001).
+
+What differed was the value a handle resolved to. Kirby Air Riders' **vertex
+light bake** picks its light volumes from a table in a **constant buffer** whose
+offset is a storage-buffer word times 16, **kept in workgroup memory**. Our tree
+had Satsuma Build 93's *storage-buffer* handle tables (the compute light probes),
+but not the constant-buffer ones: the handle fell back to the sampler-bits word
+alone, which is no texture, and the bake wrote zero light to every vertex. Satsuma
+says exactly that in `TryCbufTable`'s comment.
+
+Ported from Satsuma Build 93 (`be9b8f6ea0`): `TableOffsetShift` (recovers the
+shift by scanning the slot's `WriteSharedU32` when the offset arrives as a
+`LoadSharedU32`), `TryCbufTable`, and `ConstBufferAddr::dynamic_shift`. Where our
+tree differs: `MakeInst` is one block instead of two, so `Op::Index` and
+`Op::TableWord` win when they already resolve; a handle that depends on a load is
+resolved even on a host without non-uniform sampled-image array indexing (a cbuf
+table needs no handle program); and a table does not replace an array the earlier
+search already found in the same buffer. `EDEN_NX2_CBUF_TABLES=0` and
+`EDEN_NX2_HANDLE_TABLES=0` turn them off for an A/B.
+
+Also ruled out on the way, with data, so nobody repeats it: the scaling filter
+and anti-aliasing, `EDEN_NX2_TC_KEEP_NEWEST`, and the local-memory index clamp
+(a real SPIR-V UB, kept, but not this). Two comparisons that *looked* like
+findings were artifacts and are not evidence: matching TIC indices across two
+runs (the table is filled in a different order), and comparing a UTF-16 dump of
+Satsuma's header against our UTF-8 one.
+
+**Still open:** the device loss.
+
 ## A DMA copy's whole destination is GPU-written
 
 `BufferCache::DMACopy` rewrites the destination through the copy engine, but it
