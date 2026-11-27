@@ -744,6 +744,57 @@ TEST_CASE("Hosts without handle table arrays keep the word the earlier search fi
     }
 }
 
+TEST_CASE("A constant buffer table at an offset kept in workgroup memory is a descriptor array",
+          "[video_core][texture_handles]") {
+    // Kirby Air Riders' vertex light bake picks its light volumes by an offset it works out per
+    // invocation: a storage buffer word times 16, kept in workgroup memory, which indexes a
+    // constant buffer of handles with the sampler bits ORed in. The constant buffer search finds
+    // only the sampler word (it skips loads), so without the table the shader sampled that word
+    // alone, which is no texture, and wrote zero light to every vertex.
+    for (const bool with_sampler : {false, true}) {
+        CAPTURE(with_sampler);
+        HandleProgram shader;
+        shader.env.expected_handle = with_sampler ? 0x20000abcU : 0xabcU;
+        shader.env.cbuf_values = {{{0, 0}, 0xabc}, {{0, 0xa0}, 0x20000000}};
+        const Value frame{shader.Emit(Opcode::GetRegister, {Value{IR::Reg::R0}})};
+        const Value slot{shader.Add(frame, Value{0x40U})};
+        const Value thread{shader.Emit(Opcode::GetRegister, {Value{IR::Reg::R1}})};
+        const Value word{shader.Emit(Opcode::LoadStorage32, {Value{0U}, thread})};
+        shader.Emit(Opcode::WriteSharedU32,
+                    {slot, shader.Emit(Opcode::ShiftLeftLogical32, {word, Value{4U}})});
+        const Value offset{shader.Emit(Opcode::LoadSharedU32, {slot})};
+        const Value table{shader.Emit(Opcode::GetCbufU32, {Value{0U}, offset})};
+        const Value handle{
+            with_sampler
+                ? Value{shader.Emit(Opcode::BitwiseOr32,
+                                    {table, shader.Emit(Opcode::GetCbufU32,
+                                                        {Value{0U}, Value{0xa0U}})})}
+                : table};
+        auto& sample{shader.Sample(handle)};
+        shader.Run();
+
+        const auto& descriptor{shader.Descriptor(sample)};
+        // No handle program: the array is the constant buffer's handles, one per 16-byte step.
+        CHECK(descriptor.handle_program == ~0U);
+        CHECK_FALSE(descriptor.handle_table);
+        CHECK(descriptor.count == 1024);
+        CHECK(descriptor.size_shift == 4);
+        CHECK(descriptor.cbuf_index == 0);
+        CHECK(descriptor.cbuf_offset == 0);
+        CHECK(descriptor.has_secondary == with_sampler);
+        CHECK(descriptor.secondary_cbuf_offset == (with_sampler ? 0xa0U : 0U));
+        // The instruction indexes the array with the offset shifted to a word of 16 bytes.
+        REQUIRE_FALSE(sample.Arg(0).IsEmpty());
+        const IR::Inst* const selection{sample.Arg(0).InstRecursive()};
+        REQUIRE(selection->GetOpcode() == Opcode::UMin32);
+        CHECK(selection->Arg(1).U32() == descriptor.count - 1);
+        const IR::Inst* const element{selection->Arg(0).InstRecursive()};
+        REQUIRE(element->GetOpcode() == Opcode::ShiftRightLogical32);
+        CHECK(element->Arg(0).Resolve() == offset.Resolve());
+        CHECK(element->Arg(1).U32() == 4);
+    }
+}
+
 TEST_CASE("Handle tracking skips the floating-point math a reused register leads to",
           "[video_core][texture_handles]") {
     // The handle register holds a storage word on one path and a float result on the other: no

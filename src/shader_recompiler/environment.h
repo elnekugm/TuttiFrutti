@@ -71,6 +71,7 @@ struct ConstBufferAddr {
     /// The handle is an element of a handle table (see shader_handle_program.h): an array of the
     /// table's handles, indexed by the byte offset of its 4-byte words (size_shift 2).
     bool handle_table{};
+    u32 dynamic_shift{};     ///< log2 of the byte step of dynamic_offset when it isn't read off it
 };
 
 class Environment {

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
@@ -397,6 +398,7 @@ bool IsStorageImageOpcode(IR::Opcode opcode) {
 u32 DescriptorSizeShift(const ConstBufferAddr& cbuf) {
     return cbuf.handle_table          ? HANDLE_TABLE_SIZE_SHIFT
            : cbuf.count <= 1          ? DESCRIPTOR_SIZE_SHIFT
+           : cbuf.dynamic_shift != 0  ? cbuf.dynamic_shift
            : cbuf.handle_program != ~0U ? 0U
                                       : DynamicDescriptorSizeShift(cbuf.dynamic_offset);
 }
@@ -1433,6 +1435,13 @@ constexpr u32 HANDLE_TABLE_MAX = 256;
 std::optional<ConstBufferAddr> TryHandleTable(const IR::Inst& inst,
                                               [[maybe_unused]] Environment& env,
                                               const IR::Block* block) {
+    // EDEN_NX2_HANDLE_TABLES=0: no handle tables; such handles fall back to a constant buffer
+    // word as before (A/B). Read when shaders are translated.
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_HANDLE_TABLES");
+        return value == nullptr || *value != '0';
+    }();
+    if (!enabled) return std::nullopt;
     if (!g_handle_programs || !g_handle_info || inst.Arg(0).IsImmediate()) return std::nullopt;
     std::vector<u32> code;
     int budget = 4096;
@@ -1478,6 +1487,119 @@ std::optional<ConstBufferAddr> TryHandleTable(const IR::Inst& inst,
     };
 }
 
+// The byte step of a constant buffer table offset: the shift it is made with, also when the
+// shader kept it in workgroup memory in between (native programs spill registers there: every
+// store to the slot the offset is loaded from has to make it with the same shift).
+// Ported from Satsuma (FilDev), Build 93. g_program is the program of the pass on this thread,
+// Build 93's g_handle_ir.
+u32 TableOffsetShift(const IR::Value& offset) {
+    const auto made_shift = [](const IR::Value& value) -> u32 {
+        if (value.IsImmediate()) return 0;
+        const IR::Inst* const inst{value.InstRecursive()};
+        if (inst->GetOpcode() != IR::Opcode::ShiftLeftLogical32 || !inst->Arg(1).IsImmediate()) {
+            return 0;
+        }
+        const u32 shift{inst->Arg(1).U32()};
+        return shift >= DESCRIPTOR_SIZE_SHIFT && shift < 16 ? shift : 0;
+    };
+    if (const u32 shift{made_shift(offset)}) return shift;
+    const IR::Inst* const load{offset.InstRecursive()};
+    if (load->GetOpcode() != IR::Opcode::LoadSharedU32 || !g_program) return DESCRIPTOR_SIZE_SHIFT;
+    // A slot is its constant distance from the frame the address is made from.
+    const auto slot_of = [](const IR::Value& address) -> std::optional<u32> {
+        if (address.IsImmediate()) return std::nullopt;
+        const IR::Inst* const add{address.InstRecursive()};
+        if (add->GetOpcode() != IR::Opcode::IAdd32) return std::nullopt;
+        if (add->Arg(1).IsImmediate()) return add->Arg(1).U32();
+        if (add->Arg(0).IsImmediate()) return add->Arg(0).U32();
+        return std::nullopt;
+    };
+    const std::optional<u32> slot{slot_of(load->Arg(0))};
+    if (!slot) return DESCRIPTOR_SIZE_SHIFT;
+    u32 found{};
+    for (const IR::Block* const block : g_program->blocks) {
+        for (const IR::Inst& inst : block->Instructions()) {
+            if (inst.GetOpcode() != IR::Opcode::WriteSharedU32 || slot_of(inst.Arg(0)) != slot) {
+                continue;
+            }
+            const u32 shift{made_shift(inst.Arg(1))};
+            if (shift == 0 || (found != 0 && found != shift)) return DESCRIPTOR_SIZE_SHIFT;
+            found = shift;
+        }
+    }
+    return found != 0 ? found : DESCRIPTOR_SIZE_SHIFT;
+}
+
+// A handle read from a constant buffer at an offset every invocation works out for itself (no
+// handle program can give it for a whole draw or dispatch), with or without a second constant
+// buffer word or'ed in (sampler bits): a descriptor array of the buffer's handles, indexed where
+// the texture is used by that offset. Kirby Air Riders' vertex light bake picks its light volumes
+// like this (the offset is a storage buffer word times 16, kept in workgroup memory); it sampled
+// the word of sampler bits alone, which is no texture, and wrote zero light to every vertex.
+// Ported from Satsuma (FilDev), Build 93.
+// EDEN_NX2_CBUF_TABLES=0 turns it off (A/B). Read when shaders are translated.
+std::optional<ConstBufferAddr> TryCbufTable(const IR::Inst& inst, Environment& env,
+                                            const HostTranslateInfo& host_info,
+                                            const IR::Block* block) {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_CBUF_TABLES");
+        return value == nullptr || *value != '0';
+    }();
+    if (!enabled || !g_handle_programs || inst.Arg(0).IsImmediate()) return std::nullopt;
+    const auto is_table = [](const IR::Value& value) {
+        if (value.IsImmediate()) return false;
+        const IR::Inst* const read{value.InstRecursive()};
+        return read->GetOpcode() == IR::Opcode::GetCbufU32 && read->Arg(0).IsImmediate() &&
+               !read->Arg(1).IsImmediate();
+    };
+    const IR::Inst* const handle{inst.Arg(0).InstRecursive()};
+    const IR::Inst* table{};
+    std::optional<ConstBufferAddr> secondary;
+    if (handle->GetOpcode() == IR::Opcode::BitwiseOr32) {
+        for (size_t arg = 0; arg < 2 && !table; ++arg) {
+            const IR::Value other{handle->Arg(arg ^ 1)};
+            if (!is_table(handle->Arg(arg)) || other.IsImmediate()) continue;
+            secondary = TrackCached(other, env, host_info, block);
+            if (!secondary || secondary->count != 1 || secondary->has_secondary ||
+                secondary->handle_program != ~0U) {
+                secondary.reset();
+                continue;
+            }
+            table = handle->Arg(arg).InstRecursive();
+        }
+    } else if (is_table(inst.Arg(0))) {
+        table = handle;
+    }
+    if (!table) return std::nullopt;
+    const IR::Value offset{table->Arg(1)};
+    {
+        // An offset one evaluation gives keeps the path it had.
+        std::vector<u32> code;
+        int budget = 4096;
+        g_handle_failure = IR::Opcode::Void;
+        if (BuildHandleProgram(offset, code, budget, block)) return std::nullopt;
+    }
+    const u32 shift{TableOffsetShift(offset)};
+    const u32 sampled_limit{(std::max)(1U, (std::min)(host_info.max_per_stage_descriptor_sampled_images,
+                                                      host_info.max_descriptor_set_sampled_images))};
+    const u32 resource_limit{(std::max)(1U, host_info.max_per_stage_resources)};
+    const u32 count{DynamicDescriptorCount(
+        0, shift, (std::min)({DESCRIPTOR_MAX_COUNT, sampled_limit, resource_limit}))};
+    if (count <= 1) return std::nullopt;
+    return ConstBufferAddr{
+        .index = table->Arg(0).U32(),
+        .offset = 0,
+        .shift_left = 0,
+        .secondary_index = secondary ? secondary->index : 0,
+        .secondary_offset = secondary ? secondary->offset : 0,
+        .secondary_shift_left = secondary ? secondary->shift_left : 0,
+        .dynamic_offset = IR::U32{offset},
+        .count = count,
+        .has_secondary = secondary.has_value(),
+        .dynamic_shift = shift,
+    };
+}
+
 TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const HostTranslateInfo& host_info) {
     ConstBufferAddr addr;
     if (IsBindless(inst)) {
@@ -1487,15 +1609,16 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
         const bool sampled{!IsStorageImageOpcode(IndexedInstruction(inst)) &&
                            inst.Flags<IR::TextureInstInfo>().type != TextureType::Buffer};
         // A handle computed from constant buffer and storage buffer words: a single handle, an
-        // array of a table at an index the shader reads per invocation (g_handle_index), or, when
-        // no index word gives it, an array of a handle table's words (TryHandleTable). The earlier
-        // search skips loads, so a handle the shader reads from a table at a per-invocation offset
-        // (Kirby Air Riders' light probes) tracks to the constant buffer word it shares with the
-        // sampler bits alone: compute such a handle rather than take that word.
-        const bool compute{!track_addr ||
-                           (g_handle_programs && sampled &&
-                            host_info.support_handle_table_arrays &&
-                            DependsOnMemoryLoad(inst.Arg(0)))};
+        // array of a table at an index the shader reads per invocation (g_handle_index), an array
+        // of a handle table's words (TryHandleTable), or an array of a constant buffer's handles
+        // read at an offset it works out per invocation (TryCbufTable). The earlier search skips
+        // loads, so a handle the shader reads from a table at a per-invocation offset (Kirby Air
+        // Riders' light probes) tracks to the constant buffer word it shares with the sampler bits
+        // alone: compute such a handle rather than take that word.
+        const bool depends_on_load{sampled && DependsOnMemoryLoad(inst.Arg(0))};
+        // Even without handle-table arrays: a constant buffer table of handles needs no handle
+        // program, and the word the earlier search finds may be the sampler bits alone.
+        const bool compute{!track_addr || depends_on_load};
         if (compute) {
             // Read from a storage buffer (a handle table): computed for each draw.
             std::vector<u32> code;
@@ -1519,6 +1642,16 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
                 // Read per invocation from a handle table whose index no word gives: an array of
                 // the table's handles, indexed by the load's own byte offset.
                 if (const std::optional table{TryHandleTable(inst, env, block)}) {
+                    return TextureInst{.cbuf = *table, .inst = &inst, .block = block};
+                }
+            }
+            // The earlier search found an array of the buffer already (its dynamic offset could be
+            // read off): that array is the one the shader's index selects, and its count is what
+            // the index can reach.
+            if (!built && g_handle_programs && sampled && (!track_addr || track_addr->count <= 1)) {
+                // Read from a constant buffer at an offset each invocation works out for itself
+                // (Kirby Air Riders' vertex light bake): an array of that buffer's handles.
+                if (const std::optional table{TryCbufTable(inst, env, host_info, block)}) {
                     return TextureInst{.cbuf = *table, .inst = &inst, .block = block};
                 }
             }
