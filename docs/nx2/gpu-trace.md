@@ -8,12 +8,14 @@ A GPU trace (`.lxtrace`) holds what the emulated GPU consumed over a window, in 
 eden-cli --replay <trace> --out <dir> [--frames N] [--device N]
 ```
 
-The replay needs no game, no window and no keys. It brings up the GPU on a bare `Core::System` (`System::InitializeForGpuReplay`: kernel, Host1x and the GPU, no process, audio or services), restores the snapshot and feeds the records through the GPU in order. It writes per present:
+The replay needs no game, no visible window and no keys. It brings up the GPU on a bare `Core::System` (`System::InitializeForGpuReplay`: kernel, Host1x and the GPU, no process, audio or services), restores the snapshot and feeds the records through the GPU in order. It writes per present:
 
 - `frame-NNNN.png`: the composited frame at the size of its largest layer (crop rectangle), through the renderer's screenshot path.
 - `frames.json`: per frame its file, size, XXH3-128 hash of the RGBA bytes and the wall time since the previous frame, plus the program id and the device that replayed it.
 
-The window is a `VK_EXT_headless_surface` surface (`WindowSystemType::Headless`), so any Vulkan driver with that extension works, Mesa's lavapipe included.
+The replay presents on a `VK_EXT_headless_surface` surface (`WindowSystemType::Headless`) where the driver advertises the extension, so a machine with no display works as long as one does: Mesa's lavapipe included. Windows drivers and MoltenVK do not have it, so there the CLI passes `Replay` a fallback window: an SDL3 window created `SDL_WINDOW_HIDDEN | SDL_WINDOW_NOT_FOCUSABLE`, which is never shown, focused or interacted with, and the renderer makes its ordinary native surface from it. `Vulkan::IsHeadlessSurfaceSupported` checks the loader's instance extensions before the GPU comes up, and the log names the path taken (`presenting on a NxM headless surface` or `no VK_EXT_headless_surface, presenting on a hidden NxM window`). Both paths capture through the same screenshot path, so a frame's PNG and hash do not depend on which one presented it. A frontend that passes no fallback reports the missing extension instead of starting the GPU.
+
+The hidden window lives until the replay has shut the GPU down, which destroys the renderer's surface first. A replay raises no dialogs and leaves no window or thread behind.
 
 `eden-cli --gpu-trace-sample <trace>` writes a synthetic trace that needs no game: one Switch 2 channel whose four frames are two CPU-written images and two sets of 3D engine clears (whole and scissored). The unit tests read it back (`[gpu_trace]`).
 

@@ -37,6 +37,7 @@
 #include "video_core/nx2.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_base.h"
+#include "video_core/vulkan_common/vulkan_instance.h"
 
 namespace VideoCommon::GpuTrace {
 namespace {
@@ -103,8 +104,10 @@ Tegra::FramebufferConfig ToConfig(const PresentLayer& layer) {
 /// One replay: the trace's address spaces, channels and memory, brought up on a fresh System.
 class Replayer {
 public:
-    Replayer(Core::System& system_, const ReplayOptions& options_)
-        : system{system_}, options{options_}, reader{options_.trace} {}
+    Replayer(Core::System& system_, const ReplayOptions& options_,
+             ReplayWindowFactory window_factory_)
+        : system{system_}, options{options_}, reader{options_.trace},
+          window_factory{std::move(window_factory_)} {}
 
     ~Replayer() {
         Shutdown();
@@ -115,6 +118,7 @@ public:
 private:
     bool ReadSnapshot(std::string& error);
     bool BringUp(std::string& error);
+    bool MakeWindow(std::string& error);
     bool Stream(std::string& error);
     void Shutdown();
 
@@ -131,6 +135,7 @@ private:
     Core::System& system;
     const ReplayOptions& options;
     Reader reader;
+    ReplayWindowFactory window_factory;
 
     nlohmann::json config;
     u64 program_id = 0;
@@ -142,7 +147,7 @@ private:
     std::vector<MemoryRecord> start_memory;
     std::unordered_map<Hash, std::shared_ptr<const std::vector<u8>>, HashKey> blobs;
 
-    std::unique_ptr<HeadlessWindow> window;
+    std::shared_ptr<Core::Frontend::EmuWindow> window;
     bool powered = false;
     std::unique_ptr<Kernel::KProcess> process;
     Core::Asid asid{};
@@ -262,6 +267,29 @@ bool Replayer::ReadSnapshot(std::string& error) {
     return false;
 }
 
+bool Replayer::MakeWindow(std::string& error) {
+    const auto width = config.value("width", 1920u);
+    const auto height = config.value("height", 1080u);
+    if (Vulkan::IsHeadlessSurfaceSupported()) {
+        LOG_INFO(HW_GPU, "GPU trace replay: presenting on a {}x{} headless surface", width, height);
+        window = std::make_shared<HeadlessWindow>(width, height);
+        return true;
+    }
+    if (!window_factory) {
+        error = "VK_EXT_headless_surface is not available and the frontend gave no window";
+        return false;
+    }
+    LOG_INFO(HW_GPU,
+             "GPU trace replay: no VK_EXT_headless_surface, presenting on a hidden {}x{} window",
+             width, height);
+    window = window_factory(width, height);
+    if (!window) {
+        error = "could not make the hidden window the replay presents on";
+        return false;
+    }
+    return true;
+}
+
 bool Replayer::BringUp(std::string& error) {
     if (config.is_null()) {
         error = "the trace has no config record";
@@ -285,8 +313,9 @@ bool Replayer::BringUp(std::string& error) {
     Service::Nvidia::Devices::g_nx2_driver = switch2;
 
     system.Initialize();
-    window = std::make_unique<HeadlessWindow>(config.value("width", 1920u),
-                                              config.value("height", 1080u));
+    if (!MakeWindow(error)) {
+        return false;
+    }
     if (system.InitializeForGpuReplay(*window, program_id) != Core::SystemResultStatus::Success) {
         error = "the GPU could not start (is a Vulkan device available?)";
         return false;
@@ -704,8 +733,9 @@ void Replayer::Shutdown() {
 }
 } // Anonymous namespace
 
-bool Replay(Core::System& system, const ReplayOptions& options, std::string& error) {
-    Replayer replayer{system, options};
+bool Replay(Core::System& system, const ReplayOptions& options, std::string& error,
+            ReplayWindowFactory window_factory) {
+    Replayer replayer{system, options, std::move(window_factory)};
     return replayer.Run(error);
 }
 

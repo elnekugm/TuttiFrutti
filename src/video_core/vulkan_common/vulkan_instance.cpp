@@ -16,6 +16,7 @@
 #include <vulkan/vulkan_core.h>
 #include "core/frontend/emu_window.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
+#include "video_core/vulkan_common/vulkan_library.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #ifdef EGLANTINE_STREAMLINE
 #include <algorithm>
@@ -39,6 +40,15 @@ namespace {
     return true;
 }
 
+/// Same lookup as AreExtensionsSupported for one optional extension, without an error log: a
+/// missing extension here is a result the caller branches on, not a failure.
+[[nodiscard]] bool HasExtension(std::vector<VkExtensionProperties> const& properties,
+                                const char* extension) {
+    return std::ranges::any_of(properties, [extension](const VkExtensionProperties& property) {
+        return std::strcmp(extension, property.extensionName) == 0;
+    });
+}
+
 [[nodiscard]] std::vector<const char*> RequiredExtensions(
     const vk::InstanceDispatch& dld, std::vector<VkExtensionProperties> const& properties,
     Core::Frontend::WindowSystemType window_type, bool enable_validation) {
@@ -47,7 +57,7 @@ namespace {
     // Headless presents to VK_EXT_headless_surface where the driver has it (GPU trace replay).
     const bool headless_surface =
         window_type == Core::Frontend::WindowSystemType::Headless &&
-        AreExtensionsSupported(dld, properties, std::array{VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME});
+        HasExtension(properties, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
     switch (window_type) {
     case Core::Frontend::WindowSystemType::Headless:
         if (headless_surface) {
@@ -193,6 +203,28 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     }
     return instance;
+}
+
+bool IsHeadlessSurfaceSupported() {
+#if defined(__ANDROID__) && defined(ARCHITECTURE_arm64)
+    // Android's Vulkan driver is loaded by the frontend and there is no GPU trace replay there.
+    return false;
+#else
+    static const bool supported = [] {
+        auto library = OpenLibrary();
+        if (!library->IsOpen()) {
+            return false;
+        }
+        vk::InstanceDispatch dld;
+        if (!library->GetSymbol("vkGetInstanceProcAddr", &dld.vkGetInstanceProcAddr) ||
+            !vk::Load(dld)) {
+            return false;
+        }
+        const auto properties = vk::EnumerateInstanceExtensionProperties(dld);
+        return properties && HasExtension(*properties, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+    }();
+    return supported;
+#endif
 }
 
 } // namespace Vulkan

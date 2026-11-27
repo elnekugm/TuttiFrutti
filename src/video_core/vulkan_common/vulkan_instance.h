@@ -26,4 +26,9 @@ namespace Vulkan {
     Core::Frontend::WindowSystemType window_type = Core::Frontend::WindowSystemType::Headless,
     bool enable_validation = false);
 
+/// Whether the Vulkan loader advertises VK_EXT_headless_surface, so a windowless surface can be
+/// made for it. False when no Vulkan library loads. The GPU trace replay uses this to pick a
+/// headless surface or a hidden window. See docs/nx2/gpu-trace.md.
+[[nodiscard]] bool IsHeadlessSurfaceSupported();
+
 } // namespace Vulkan

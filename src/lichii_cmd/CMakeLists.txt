@@ -26,6 +26,10 @@ endif()
 add_executable(lichii-cmd
     emu_window/emu_window_sdl3.cpp
     emu_window/emu_window_sdl3.h
+    emu_window/emu_window_sdl3_hidden.cpp
+    emu_window/emu_window_sdl3_hidden.h
+    emu_window/sdl_native_window.cpp
+    emu_window/sdl_native_window.h
     emu_window/sdl_window_state.h
     emu_window/emu_window_sdl3_null.cpp
     emu_window/emu_window_sdl3_null.h

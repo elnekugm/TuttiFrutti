@@ -70,6 +70,7 @@
 #ifdef HAS_OPENGL
 #include "lichii_cmd/emu_window/emu_window_sdl3_gl.h"
 #endif
+#include "lichii_cmd/emu_window/emu_window_sdl3_hidden.h"
 #include "lichii_cmd/emu_window/emu_window_sdl3_null.h"
 #include "lichii_cmd/emu_window/emu_window_sdl3_vk.h"
 
@@ -527,7 +528,7 @@ static bool ReplayGpuTrace(Core::System& system, int argc, char** argv) {
         return false;
     }
     std::string error;
-    if (!GpuTrace::Replay(system, options, error)) {
+    if (!GpuTrace::Replay(system, options, error, MakeHiddenReplayWindow)) {
         fmt::print(stderr, "replay failed: {}\n", error);
         return false;
     }

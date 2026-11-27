@@ -14,6 +14,7 @@
 #include "common/scm_rev.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "lichii_cmd/emu_window/emu_window_sdl3_vk.h"
+#include "lichii_cmd/emu_window/sdl_native_window.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_properties.h>
@@ -35,8 +36,6 @@ EmuWindow_SDL3_VK::EmuWindow_SDL3_VK(InputCommon::InputSubsystem* input_subsyste
         std::exit(EXIT_FAILURE);
     }
 
-    const SDL_PropertiesID window_props = SDL_GetWindowProperties(render_window);
-
     SetWindowIcon();
 
     if (fullscreen) {
@@ -44,47 +43,7 @@ EmuWindow_SDL3_VK::EmuWindow_SDL3_VK(InputCommon::InputSubsystem* input_subsyste
         ShowCursor(false);
     }
 
-    if (void* hwnd =
-            SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr)) {
-        window_info.type = Core::Frontend::WindowSystemType::Windows;
-        window_info.render_surface = hwnd;
-    } else if (void* wl_display =
-                   SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER,
-                                          nullptr);
-               wl_display != nullptr) {
-        void* wl_surface =
-            SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr);
-        if (wl_surface == nullptr) {
-            LOG_CRITICAL(Frontend, "Wayland surface is unavailable");
-            std::exit(EXIT_FAILURE);
-        }
-        window_info.type = Core::Frontend::WindowSystemType::Wayland;
-        window_info.display_connection = wl_display;
-        window_info.render_surface = wl_surface;
-    } else if (void* x11_display =
-                   SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER,
-                                          nullptr);
-               x11_display != nullptr) {
-        const auto x11_window =
-            SDL_GetNumberProperty(window_props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
-        if (x11_window == 0) {
-            LOG_CRITICAL(Frontend, "X11 window handle is unavailable");
-            std::exit(EXIT_FAILURE);
-        }
-        window_info.type = Core::Frontend::WindowSystemType::X11;
-        window_info.display_connection = x11_display;
-        window_info.render_surface = reinterpret_cast<void*>(static_cast<uintptr_t>(x11_window));
-    } else if (SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
-                                      nullptr) != nullptr) {
-        window_info.type = Core::Frontend::WindowSystemType::Cocoa;
-        window_info.render_surface = SDL_Metal_GetLayer(SDL_Metal_CreateView(render_window));
-    } else if (void* android_window =
-                   SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER,
-                                          nullptr);
-               android_window != nullptr) {
-        window_info.type = Core::Frontend::WindowSystemType::Android;
-        window_info.render_surface = android_window;
-    } else {
+    if (!SdlFillWindowInfo(render_window, window_info)) {
         LOG_CRITICAL(Frontend, "Unable to determine native window backend from SDL properties");
         std::exit(EXIT_FAILURE);
     }
