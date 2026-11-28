@@ -329,14 +329,23 @@ select was lost), and its capabilities are `Shader`, `ImageQuery`, `SampledBuffe
 `ImageGatherExtended` and `SignedZeroInfNanPreserve`. Plain IEEE f32 gives the same `NaN`
 on the console.
 
-That leaves a contradiction worth following: with the same constants, the same vertex
-buffers, the same null storage bindings (all zero) and one UNORM texture that cannot hold a
-NaN, every input to the draw is deterministic, yet the result differs between frame 15 and
-frame 16. So the difference is not in the shader's inputs but in what the draw is blended
-into: frame 15's sky target is blown out (values 8-11 vs 0.5 in a clean frame), and a blend
-of zero/near-zero source against it can produce `0 * Inf`. Frame 16 also has the same draw
-every frame, so the frames that show the wedge are the ones where the depth test lets it
-through over that sky.
+### The frames are not the same draw after all: the vertex storage buffer is null
+
+Comparing the buffer dump's entries for `1608b9179183e4fd` (the effect's vertex stage)
+across the two frames shows they do not have the same bindings:
+
+| Frame | Uniforms | Storage |
+|---|---|---|
+| 15 (wedge) | `[0]`, `[3]` 528 B, `[4]`, `[5]`, `[6]` | **none** |
+| 16 (clean) | `[0]`, `[4]`, `[5]`, `[6]` (different bytes) | **`[0]`, 4 MiB (the particle pool)** |
+
+So the vertex shader reads eight storage buffers that are null in the wedged frame and the
+pool in the clean one. `BindGraphicsStorageBuffer` turns a zero pointer (direct or through a
+table) into `NULL_BINDING`, which the draw then reads as zeros, and the shader's arithmetic
+on those zeros is what writes the NaN - which is why every input looked identical when only
+the constants and vertices were compared. Finding why that binding is null in those frames
+(the pointer word, the table entry, or the constant buffer it comes from being disabled) is
+the next step, and it is the concrete emulator defect to look for.
 
 Diagnostics added for this round: `EDEN_NX2_RENDER_TRACE_FRAME=<n>` picks the one frame
 the render trace describes (instead of every 600th), `EDEN_NX2_FRAME_DUMP_SHADERS=1` and
