@@ -670,24 +670,53 @@ bool FrameDump::Record(const Target& target, std::string name, std::string tags)
     LOG_INFO(Render_Vulkan, "Frame dump readback {}: size={} format={} extent={}x{}x{} level={} layer={}",
              name, size, static_cast<u32>(target.format), target.width, target.height, target.depth,
              target.level, target.layer);
-    scheduler.Record([image = target.image, destination = *buffer, copy](vk::CommandBuffer cmdbuf) {
-        const VkMemoryBarrier before{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-            .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-        };
-        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                               0, before);
-        cmdbuf.CopyImageToBuffer(image, VK_IMAGE_LAYOUT_GENERAL, destination, copy);
-        const VkMemoryBarrier after{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_HOST_READ_BIT | VK_ACCESS_MEMORY_READ_BIT |
-                             VK_ACCESS_MEMORY_WRITE_BIT,
-        };
+    // The image is copied from TRANSFER_SRC_OPTIMAL, not GENERAL: the texture cache leaves images in
+    // GENERAL between commands, but the sampled views this dump also records can be mid-frame in
+    // another layout, and naming GENERAL for a copy from it is undefined behaviour (a device loss).
+    const VkImageMemoryBarrier to_transfer{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = target.image,
+        .subresourceRange{
+            .aspectMask = copy.imageSubresource.aspectMask,
+            .baseMipLevel = copy.imageSubresource.mipLevel,
+            .levelCount = 1,
+            .baseArrayLayer = copy.imageSubresource.baseArrayLayer,
+            .layerCount = 1,
+        },
+    };
+    const VkImageMemoryBarrier to_general{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = target.image,
+        .subresourceRange{
+            .aspectMask = copy.imageSubresource.aspectMask,
+            .baseMipLevel = copy.imageSubresource.mipLevel,
+            .levelCount = 1,
+            .baseArrayLayer = copy.imageSubresource.baseArrayLayer,
+            .layerCount = 1,
+        },
+    };
+    scheduler.Record([image = target.image, destination = *buffer, copy, to_transfer,
+                      to_general](vk::CommandBuffer cmdbuf) {
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                {}, {}, to_transfer);
+        cmdbuf.CopyImageToBuffer(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination, copy);
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0,
-                               after);
+                               {}, {}, to_general);
     });
     pending_bytes += size;
     readbacks.push_back({std::move(buffer), target, std::move(name), std::move(tags)});

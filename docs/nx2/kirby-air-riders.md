@@ -282,6 +282,32 @@ and 33 (all at or after the effect draws). Whether that read-back loss is the sa
 the game's own device loss is still open; it needs its own capture set to reproduce
 without the dump.
 
+### What the fragment shader does
+
+Its SPIR-V (captured with `EDEN_NX2_FRAME_DUMP_SHADERS=1`) samples `fs_tex2_168` at
+`attr0.xy * FragCoord.w / FragCoord.w` and then runs an absolute-log/exp tone map over the
+result (`Log2(|x|) * (1/c0_derived)` then `Exp2`). The `FragCoord.w` multiply/divide
+cancels, so it cannot be the NaN; the tone map turns Infinity into Infinity or zero but
+not into NaN. The sampled colour is the only input left that can be NaN. The effect's
+constants (one NaN at `uniform[0]+0x510`, identical in clean siblings), its vertex streams
+(binding 2 is the packed `0xFFFFFFFF` attribute in both frames) and the null storage
+bindings are ruled out, and graphics pipelines with dropped unmapped slots
+(`cache_records.py dump --unbound`) do not include this one.
+
+The NaN spreads through the bloom chain, which is why the wedge is far larger than the
+draw and has stepped edges at mip resolution. Its size varies from run to run while the
+frames that show it stay the same (15, 18, 22, 23, 25-28 in `trace-1795827473`), so frame
+dumps of two runs are not directly comparable pixel for pixel.
+
+### The null sampled image is now cleared to zero
+
+Devices without `VK_EXT_robustness2` (this NVIDIA one, so `HasNullDescriptor()` is false)
+replace a null sampled image with a freshly created 1x1 image whose contents were never
+initialised: a sampler of it returned whatever the driver's memory held. A load through a
+null descriptor returns zero, so `ImageView`'s fallback now clears the image once at
+creation, like the storage fallback in `c336dc6fa0` does. This does not change the sky
+wedge (frame 15 is identical), so it is a correctness fix, not this bug's fix.
+
 Diagnostics added for this round: `EDEN_NX2_RENDER_TRACE_FRAME=<n>` picks the one frame
 the render trace describes (instead of every 600th), `EDEN_NX2_FRAME_DUMP_SHADERS=1` and
 `EDEN_NX2_FRAME_DUMP_BUFFERS=1` write the frame's SPIR-V, pipeline keys, native programs
