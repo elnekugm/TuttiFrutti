@@ -3544,6 +3544,14 @@ void RasterizerVulkan::TraceRenderState(bool is_indexed, const char* outcome,
                       binding, stream.Address(), regs.vertex_stream_limits[binding].Address(),
                       stream.stride.Value(), stream.frequency,
                       buffer_cache_runtime.IsVertexRepacked(static_cast<u32>(binding)));
+            if (std::getenv("EDEN_NX2_VERTEX_DUMP") != nullptr) {
+                const auto device = gpu_memory->GpuToCpuAddress(stream.Address());
+                LOG_INFO(Render_Vulkan,
+                         "Vertex stream {}: address={:#x} device={} gpu_modified={}",
+                         binding, stream.Address(),
+                         device ? fmt::format("{:#x}", *device) : std::string{"unmapped"},
+                         device && buffer_cache.IsRegionGpuModified(*device, 4096));
+            }
         }
     }
     if (const char* const want = std::getenv("EDEN_NX2_VERTEX_DUMP");

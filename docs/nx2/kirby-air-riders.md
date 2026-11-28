@@ -322,6 +322,17 @@ Infinity -> `Inf * 0` in the blend -> NaN in the light target -> bloom spreads i
 wedge. Nothing in the emulator invents the NaN: `0x1180a00340` holds `0xFFFFFFFF` in the
 recorded guest memory itself, and no emulator path fills guest memory with `0xFF`.
 
+`EDEN_NX2_VERTEX_DUMP` also prints where each vertex stream comes from, and with
+`IsRegionGpuModified` on it the answer is that the NaN attribute's stream is **not
+GPU-written** (`gpu_modified=false`), while the position and the other attribute streams are
+(`true`). A stream the GPU never wrote is served from guest memory, so the `0xFFFFFFFF` is
+what the game's own CPU left there - not a compute write our emulation got wrong, and not a
+DMA (a DMA copy marks its destination GPU-written). The emulator has no path that fills guest
+memory with `0xFF`, so the game wrote it. This is a defect in the game's data, and the
+emulator reproduces it faithfully: on the console the same NaN reaches the same shader and
+the same `Inf * 0` blend. The wedge is only *sometimes* visible because the degenerate
+triangles (`w` around +-3.5e10) land on screen only in some frames.
+
 ### Capturing a replay frame with RenderDoc
 
 `EDEN_NX2_RENDERDOC_FRAME=<present index>` brackets that frame with `StartFrameCapture` /
