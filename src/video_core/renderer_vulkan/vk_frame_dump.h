@@ -47,6 +47,8 @@ public:
     /// writes the frame's SPIR-V, pipeline keys and native programs.
     void Configure(std::string_view at, std::filesystem::path trigger_file, bool sampled,
                    bool shaders_ = false, bool buffers_ = false);
+    /// EDEN_NX2_FRAME_DUMP_SAMPLED_MAX: sampled textures above this many bytes are skipped. A
+    /// large read-back loses the device on some titles, which ends the capture early.
     /// Captures the next frame for the debug server, which is told `id`. False while a capture
     /// runs.
     bool Arm(bool sampled, bool buffers, u64 id, bool shaders = false);

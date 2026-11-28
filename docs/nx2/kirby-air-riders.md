@@ -273,15 +273,21 @@ same 96-vertex instanced mesh in the clean frame 16 without a NaN. Ruled out so 
 
 Left to check: the fragment shader's `fs_tex2_168` sample and the null storage buffers
 themselves. The sampled-texture frame dump (`EDEN_NX2_FRAME_DUMP_SAMPLED`) cannot reach
-this draw: it loses the device at the first compute dispatch image it reads back
-(`invalid write at 0x37b400000`, 4 KiB at a 2 MiB boundary), the same shape as the
-game's own device loss.
+this draw: it loses the device before it. The loss is not tied to one image — with a
+2 MiB cap on sampled textures (`EDEN_NX2_FRAME_DUMP_SAMPLED_MAX`) it moves to an earlier
+pass, and `invalid write at 0x37b400000` (4 KiB at a 2 MiB boundary) repeats across runs.
+The image the effect most likely samples, pass 11's `0x8111e10000`, is dumped as a render
+target and reads back 0 NaN (values 0-1), and the NaN appears only in passes 19, 31, 32
+and 33 (all at or after the effect draws). Whether that read-back loss is the same bug as
+the game's own device loss is still open; it needs its own capture set to reproduce
+without the dump.
 
 Diagnostics added for this round: `EDEN_NX2_RENDER_TRACE_FRAME=<n>` picks the one frame
 the render trace describes (instead of every 600th), `EDEN_NX2_FRAME_DUMP_SHADERS=1` and
 `EDEN_NX2_FRAME_DUMP_BUFFERS=1` write the frame's SPIR-V, pipeline keys, native programs
-and bound buffers, and `EDEN_NX2_VERTEX_DUMP=<vertex shader hash>` prints the enabled
-vertex streams of that shader's draws.
+and bound buffers, `EDEN_NX2_FRAME_DUMP_SAMPLED_MAX=<bytes>` bounds which sampled
+textures a frame dump reads back, and `EDEN_NX2_VERTEX_DUMP=<vertex shader hash>` prints
+the enabled vertex streams of that shader's draws.
 
 ## Not ported
 

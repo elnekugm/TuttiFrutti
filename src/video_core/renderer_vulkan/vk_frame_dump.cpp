@@ -461,6 +461,13 @@ bool FrameDump::RecordSampled(const Sampled& texture, u32 index, std::string nam
     // terrain textures of 896 MiB together, which filled a bug bundle's 1 GiB before any view was
     // drawn.
     const size_t size = ByteSize(*target);
+    // EDEN_NX2_FRAME_DUMP_SAMPLED_MAX=<bytes>: skip sampled textures above it. The read-back of a
+    // large one loses the device on some titles (Kirby Air Riders' 1920x1080 targets), which would
+    // end the capture before the draws of interest.
+    if (const char* const max_bytes = std::getenv("EDEN_NX2_FRAME_DUMP_SAMPLED_MAX");
+        max_bytes != nullptr && size > std::strtoull(max_bytes, nullptr, 10)) {
+        return skip("max");
+    }
     if (size > size_cap / 16 || sampled_bytes + size > size_cap / 2) {
         return skip("size");
     }
@@ -660,6 +667,9 @@ bool FrameDump::Record(const Target& target, std::string name, std::string tags)
         .imageExtent{target.width, target.height, target.depth},
     };
     scheduler.RequestOutsideRenderPassOperationContext();
+    LOG_INFO(Render_Vulkan, "Frame dump readback {}: size={} format={} extent={}x{}x{} level={} layer={}",
+             name, size, static_cast<u32>(target.format), target.width, target.height, target.depth,
+             target.level, target.layer);
     scheduler.Record([image = target.image, destination = *buffer, copy](vk::CommandBuffer cmdbuf) {
         const VkMemoryBarrier before{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
@@ -700,6 +710,7 @@ bool FrameDump::RecordBuffer(VkBuffer source, u32 offset, u32 size, std::string 
         MemoryUsage::Download);
     const VkBufferCopy copy{.srcOffset = offset, .dstOffset = 0, .size = size};
     scheduler.RequestOutsideRenderPassOperationContext();
+    LOG_INFO(Render_Vulkan, "Frame dump buffer readback: size={} tags={}", size, tags);
     scheduler.Record([source, destination = *buffer, copy](vk::CommandBuffer cmdbuf) {
         const VkMemoryBarrier before{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
