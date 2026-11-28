@@ -2976,6 +2976,37 @@ void TextureCache<P>::UploadImageContents(Image& image, StagingBuffer& staging) 
     const std::span<u8> mapped_span = staging.mapped_span;
     const GPUVAddr gpu_addr = image.gpu_addr;
 
+    // EDEN_NX2_TC_UPLOAD_BYTES=1: the first 16 bytes of the guest source and of the host staging
+    // copy of every upload, to tell a read that returned the wrong bytes from a copy that mangled
+    // the right ones. Off by default: it costs a 16-byte guest read per upload.
+    static const bool upload_bytes_trace = [] {
+        const char* const value = std::getenv("EDEN_NX2_TC_UPLOAD_BYTES");
+        return value != nullptr && *value != '\0' && *value != '0';
+    }();
+    const auto trace_upload_bytes = [&](std::span<const u8> host) {
+        if (!upload_bytes_trace) {
+            return;
+        }
+        using namespace VideoCore::Surface;
+        const size_t shown = DefaultBlockWidth(image.info.format) != 1 ? 256 : 16;
+        const size_t size = (std::min)(shown, static_cast<size_t>(image.guest_size_bytes));
+        std::vector<u8> guest(size);
+        gpu_memory->ReadBlock(gpu_addr, guest.data(), guest.size(),
+                              VideoCommon::CacheType::NoTextureCache);
+        const auto hex = [](std::span<const u8> bytes) {
+            std::string out;
+            for (const u8 byte : bytes) {
+                out += fmt::format("{:02x}", byte);
+            }
+            return out;
+        };
+        LOG_WARNING(HW_GPU,
+                    "TCTRACE bytes gpu={:#x} fmt={} {}x{}x{} lv={} native_tiling={} guest={} host={}",
+                    gpu_addr, static_cast<u32>(image.info.format), image.info.size.width,
+                    image.info.size.height, image.info.size.depth, image.info.resources.levels,
+                    image.info.native_tiling, hex(guest), hex(host.first(size)));
+    };
+
     if (True(image.flags & ImageFlagBits::AcceleratedUpload) && image.host_level_offset != 0) {
         // Only levels >= host_level_offset exist on the host: read each layer's tail of the mip
         // chain into a compact buffer (layer stride = that tail's size) and decode those levels.
@@ -2991,6 +3022,7 @@ void TextureCache<P>::UploadImageContents(Image& image, StagingBuffer& staging) 
         for (auto& upload : uploads) {
             upload.buffer_offset -= level_offset;
         }
+        trace_upload_bytes(mapped_span);
         runtime.AccelerateImageUpload(image, staging, uploads, 0, 0);
         return;
     }
@@ -2998,6 +3030,7 @@ void TextureCache<P>::UploadImageContents(Image& image, StagingBuffer& staging) 
         gpu_memory->ReadBlock(gpu_addr, mapped_span.data(), mapped_span.size_bytes(),
                               VideoCommon::CacheType::NoTextureCache);
         const auto uploads = FullUploadSwizzles(image.info);
+        trace_upload_bytes(mapped_span);
         runtime.AccelerateImageUpload(image, staging, uploads, 0, 0);
         return;
     }
@@ -3026,6 +3059,7 @@ void TextureCache<P>::UploadImageContents(Image& image, StagingBuffer& staging) 
         const auto copies = UnswizzleImage(*gpu_memory, gpu_addr, image.info, swizzle_data,
                                           mapped_span, &unswizzle_worker);
         trace_untile();
+        trace_upload_bytes(mapped_span);
         image.UploadMemory(staging, copies);
     }
 }

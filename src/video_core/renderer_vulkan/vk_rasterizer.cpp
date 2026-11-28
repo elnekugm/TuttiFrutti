@@ -1452,9 +1452,17 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
                                    &texture_cache.GetSampler(image.sampler)});
             }
             recorded = frame_dump.NoteSampled(sampled);
-            // A blocked (ASTC/BCn) sampled texture gets no preview, so also keep its guest bytes:
-            // they are the only record of what the emulator uploaded for that image.
+            // A blocked (ASTC/BCn) sampled texture gets no preview. EDEN_NX2_FRAME_DUMP_GUEST=1
+            // also keeps its guest bytes: the only record of what the emulator was given for that
+            // image. Off by default — it costs a guest read and a copy per such texture per frame.
+            static const bool dump_guest_sampled = [] {
+                const char* const value = std::getenv("EDEN_NX2_FRAME_DUMP_GUEST");
+                return value != nullptr && *value != '\0' && *value != '0';
+            }();
             for (const FrameDump::Sampled& texture : sampled) {
+                if (!dump_guest_sampled) {
+                    break;
+                }
                 const auto* const backing = texture.view->BackingImage();
                 if (!backing) {
                     continue;
