@@ -308,6 +308,26 @@ null descriptor returns zero, so `ImageView`'s fallback now clears the image onc
 creation, like the storage fallback in `c336dc6fa0` does. This does not change the sky
 wedge (frame 15 is identical), so it is a correctness fix, not this bug's fix.
 
+### The effect samples one texture, and it cannot hold a NaN
+
+`EDEN_NX2_FRAME_DUMP_GUEST_ONLY=1` keeps every sampled texture's guest bytes without a
+single GPU read-back, so it cannot lose the device (1207 samples in frame 15, exit 0). With
+the fragment stage's hash on each entry, draws 107-108 (`a93e8dde125713f5`) sample exactly
+one texture: TIC 28974, `ASTC_2D_8X8_UNORM`, 4x512, at `0x1286ebc000`. An ASTC/UNORM
+texture normalises to [0, 1] and cannot produce a NaN. `EDEN_NX2_FRAME_DUMP_SAMPLED_TIC`
+reads one texture back on its own (that capture completes), and the host copy of this one
+has content the guest bytes did not show, so the decode is doing something.
+
+What is left is the arithmetic on finite values. The tone map is
+`Exp2(Log2(|c|) * (1 / divisor))`; `divisor` is a product of two values the shader derives
+(not a constant), so a zero divisor gives Infinity, and `Log2(|c|)` is exactly zero for a
+channel of 1.0 (common in a UNORM sample), which makes `0 * Inf = NaN`. Nvidia's `FMUL`
+with the `FMZ` flag returns 0 for `0 * Inf`, and the game's shader unpacks half floats
+(`UnpackHalf2x16`), which this emulator demotes to f32 on Ampere and newer (its own log
+says `Ampere and newer have broken float16 math`). Whether the demotion loses `FMZ` -
+`0 * Inf` becoming NaN where the console gives 0 - is the next thing to check, together
+with issue Lichii#745 (`FFMA.FMZ.SAT` / `HFMA2.FMZ.SAT` dropping the addend).
+
 Diagnostics added for this round: `EDEN_NX2_RENDER_TRACE_FRAME=<n>` picks the one frame
 the render trace describes (instead of every 600th), `EDEN_NX2_FRAME_DUMP_SHADERS=1` and
 `EDEN_NX2_FRAME_DUMP_BUFFERS=1` write the frame's SPIR-V, pipeline keys, native programs

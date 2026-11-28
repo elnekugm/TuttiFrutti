@@ -1454,13 +1454,21 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
             recorded = frame_dump.NoteSampled(sampled);
             // A blocked (ASTC/BCn) sampled texture gets no preview. EDEN_NX2_FRAME_DUMP_GUEST=1
             // also keeps its guest bytes: the only record of what the emulator was given for that
-            // image. Off by default — it costs a guest read and a copy per such texture per frame.
-            static const bool dump_guest_sampled = [] {
+            // image. "all" (or EDEN_NX2_FRAME_DUMP_GUEST_ONLY) keeps them for every sampled
+            // texture, which is a CPU read and needs no GPU read-back — the one capture that
+            // cannot lose the device.
+            static const int dump_guest_sampled = [] {
                 const char* const value = std::getenv("EDEN_NX2_FRAME_DUMP_GUEST");
-                return value != nullptr && *value != '\0' && *value != '0';
+                if (std::getenv("EDEN_NX2_FRAME_DUMP_GUEST_ONLY") != nullptr) {
+                    return 2;
+                }
+                if (value == nullptr || *value == '\0' || *value == '0') {
+                    return 0;
+                }
+                return std::string_view{value} == "all" ? 2 : 1;
             }();
             for (const FrameDump::Sampled& texture : sampled) {
-                if (!dump_guest_sampled) {
+                if (dump_guest_sampled == 0) {
                     break;
                 }
                 const auto* const backing = texture.view->BackingImage();
@@ -1470,7 +1478,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
                 const auto& info = backing->info;
                 const u32 block_width = VideoCore::Surface::DefaultBlockWidth(info.format);
                 const u32 block_height = VideoCore::Surface::DefaultBlockHeight(info.format);
-                if (block_width == 1 && block_height == 1) {
+                if (dump_guest_sampled == 1 && block_width == 1 && block_height == 1) {
                     continue;
                 }
                 const size_t size =
@@ -1484,9 +1492,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
                 device_memory.ReadBlockUnsafe(backing->gpu_addr, guest.data(), size);
                 recorded |= frame_dump.RecordGuestBytes(
                     guest, fmt::format(
-                               R"("kind":"sampledguest","tic":{},"format":"{}","width":{},"height":{},"gpu_addr":"{:#x}")",
-                               texture.tic, info.format, info.size.width, info.size.height,
-                               backing->gpu_addr));
+                               R"("kind":"sampledguest","tic":{},"shader":"{:016x}","format":"{}","width":{},"height":{},"gpu_addr":"{:#x}")",
+                               texture.tic, pipeline->ShaderHashes()[5], info.format,
+                               info.size.width, info.size.height, backing->gpu_addr));
             }
         }
         if (frame_dump.CapturingBuffers()) {

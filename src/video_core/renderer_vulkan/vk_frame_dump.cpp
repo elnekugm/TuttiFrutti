@@ -461,6 +461,12 @@ bool FrameDump::RecordSampled(const Sampled& texture, u32 index, std::string nam
     // terrain textures of 896 MiB together, which filled a bug bundle's 1 GiB before any view was
     // drawn.
     const size_t size = ByteSize(*target);
+    // EDEN_NX2_FRAME_DUMP_SAMPLED_TIC=<tic>: read back only this sampled texture. One copy is
+    // enough to see what a shader was given, without the queue of copies that loses the device.
+    if (const char* const only = std::getenv("EDEN_NX2_FRAME_DUMP_SAMPLED_TIC");
+        only != nullptr && std::strtoull(only, nullptr, 10) != texture.tic) {
+        return skip("tic");
+    }
     // EDEN_NX2_FRAME_DUMP_SAMPLED_MAX=<bytes>: skip sampled textures above it. The read-back of a
     // large one loses the device on some titles (Kirby Air Riders' 1920x1080 targets), which would
     // end the capture before the draws of interest.
@@ -629,6 +635,13 @@ void FrameDump::CapturePresent(ImageView& view) {
 }
 
 bool FrameDump::Record(const Target& target, std::string name, std::string tags) {
+    // EDEN_NX2_FRAME_DUMP_GUEST_ONLY=1: keep only the sampled textures' guest bytes (a CPU read),
+    // skipping every GPU read-back. The guest-bytes capture is the only one that cannot lose a
+    // device whose image read-back faults.
+    static const bool guest_only = std::getenv("EDEN_NX2_FRAME_DUMP_GUEST_ONLY") != nullptr;
+    if (guest_only) {
+        return false;
+    }
     name += target.depth > 1 ? fmt::format("_{}_{}x{}x{}_{:x}", target.format, target.width,
                                            target.height, target.depth, target.gpu_addr)
                              : fmt::format("_{}_{}x{}_{:x}", target.format, target.width,
@@ -724,6 +737,10 @@ bool FrameDump::Record(const Target& target, std::string name, std::string tags)
 }
 
 bool FrameDump::RecordBuffer(VkBuffer source, u32 offset, u32 size, std::string tags) {
+    static const bool guest_only = std::getenv("EDEN_NX2_FRAME_DUMP_GUEST_ONLY") != nullptr;
+    if (guest_only) {
+        return false;
+    }
     if (recorded_bytes + size > size_cap) {
         truncated = true;
         return false;
