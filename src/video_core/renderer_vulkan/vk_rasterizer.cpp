@@ -1506,9 +1506,10 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     }
     if (VideoCommon::RenderTrace::SampleFrame(render_trace_frame) && render_trace_draws <= 2048) {
         LOG_DEBUG(Render_Vulkan,
-                  "Render trace pipeline: frame={} draw={} hashes={:016x} dynamic_vertex_input={}",
-                  render_trace_frame, render_trace_draws, fmt::join(pipeline->ShaderHashes(), ","),
-                  pipeline->HasDynamicVertexInput());
+                  "Render trace pipeline: frame={} draw={} pipeline={:016x} hashes={:016x} "
+                  "dynamic_vertex_input={}",
+                  render_trace_frame, render_trace_draws, pipeline->Key().Hash(),
+                  fmt::join(pipeline->ShaderHashes(), ","), pipeline->HasDynamicVertexInput());
     }
 
     if (is_indirect && !mesh_draw && Common::DkbFrameTrace::Enabled()) {

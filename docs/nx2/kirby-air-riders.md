@@ -331,21 +331,22 @@ on the console.
 
 ### The frames are not the same draw after all: the vertex storage buffer is null
 
-Comparing the buffer dump's entries for `1608b9179183e4fd` (the effect's vertex stage)
-across the two frames shows they do not have the same bindings:
+**Retracted.** A first comparison of the buffer dump's entries for `1608b9179183e4fd`
+suggested the effect's vertex stage had eight null storage buffers in the wedged frame and
+the pool in the clean one. Tracing `NoteBuffers` showed all eight are bound in both frames
+(4 MiB each, `gpu_modified`), and the manifest simply had no room left: the frame's compute
+dispatches already recorded ~1.8 GiB of storage buffers, so the dump's 2 GiB cap
+(`truncated`) dropped the later draws' storage entries while their uniforms still fitted. A
+frame dump's missing entries are not evidence of a missing binding.
 
-| Frame | Uniforms | Storage |
-|---|---|---|
-| 15 (wedge) | `[0]`, `[3]` 528 B, `[4]`, `[5]`, `[6]` | **none** |
-| 16 (clean) | `[0]`, `[4]`, `[5]`, `[6]` (different bytes) | **`[0]`, 4 MiB (the particle pool)** |
-
-So the vertex shader reads eight storage buffers that are null in the wedged frame and the
-pool in the clean one. `BindGraphicsStorageBuffer` turns a zero pointer (direct or through a
-table) into `NULL_BINDING`, which the draw then reads as zeros, and the shader's arithmetic
-on those zeros is what writes the NaN - which is why every input looked identical when only
-the constants and vertices were compared. Finding why that binding is null in those frames
-(the pointer word, the table entry, or the constant buffer it comes from being disabled) is
-the next step, and it is the concrete emulator defect to look for.
+With the bindings confirmed, every input to the draw is deterministic again: same constants,
+same vertices, same pool, one UNORM texture that cannot hold a NaN, plain f32 arithmetic.
+The remaining candidate is therefore the *content* of the pool the shader reads: it is
+GPU-written, and the copies the dump records carry tens of thousands of `0xFFFFFFFF` words.
+Whether those are the game's data, or regions the host buffer never had written
+(uninitialised device memory reading as NaN), is what to check next - a host buffer that
+starts undefined and is only partly written by a compute program would give exactly a
+frame-to-frame blink as the allocator reuses it.
 
 Diagnostics added for this round: `EDEN_NX2_RENDER_TRACE_FRAME=<n>` picks the one frame
 the render trace describes (instead of every 600th), `EDEN_NX2_FRAME_DUMP_SHADERS=1` and

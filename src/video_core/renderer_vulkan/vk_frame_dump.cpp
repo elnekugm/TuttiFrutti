@@ -536,6 +536,23 @@ void FrameDump::NoteDispatchSampled(u64 shader_hash, std::span<const Sampled> te
 bool FrameDump::NoteBuffers(bool compute, std::span<const u64> shader_hashes,
                             std::span<BoundBuffer> buffers) {
     bool recorded = false;
+    if (std::getenv("EDEN_NX2_NULL_BINDING_TRACE") != nullptr && !compute) {
+        size_t storage{};
+        for (const BoundBuffer& buffer : buffers) {
+            storage += buffer.storage ? 1 : 0;
+        }
+        LOG_INFO(Render_Vulkan, "Frame dump draw {}: {} bound buffers, {} storage", draws - 1,
+                 buffers.size(), storage);
+        if (draws - 1 >= 104 && draws - 1 <= 108) {
+            for (const BoundBuffer& buffer : buffers) {
+                LOG_INFO(Render_Vulkan,
+                         "  bufferdump d{} stage={} storage={} index={} addr={:#x} size={:#x} "
+                         "gpu_modified={}",
+                         draws - 1, buffer.stage, buffer.storage, buffer.index, buffer.device_addr,
+                         buffer.size, buffer.gpu_modified);
+            }
+        }
+    }
     for (BoundBuffer& buffer : buffers) {
         const size_t program = compute ? 0 : buffer.stage + 1;
         const u64 shader = program < shader_hashes.size() ? shader_hashes[program] : 0;

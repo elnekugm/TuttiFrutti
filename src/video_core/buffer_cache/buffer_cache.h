@@ -1904,6 +1904,14 @@ bool BufferCache<P>::BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, 
     }
     channel_state->enabled_storage_buffers[stage] |= u64{1} << ssbo_index;
     channel_state->written_storage_buffers[stage] |= u64{is_written ? 1U : 0U} << ssbo_index;
+    if (NullBindingTrace() && stage == 0 && ssbo_index == 0) {
+        const auto& cbuf_state = maxwell3d->state.shader_stages[stage].const_buffers[cbuf_index];
+        LOG_INFO(HW_GPU,
+                 "Storage bind: stage={} index={} cbuffer={} offset={:#x} cbuf_enabled={} "
+                 "cbuf_address={:#x} indirect={:#x}",
+                 stage, ssbo_index, cbuf_index, cbuf_offset, cbuf_state.enabled, cbuf_state.address,
+                 indirect_offset);
+    }
     if constexpr (requires { runtime.ShouldLimitDynamicStorageBuffers(); }) {
         if (runtime.ShouldLimitDynamicStorageBuffers() && !already_enabled) {
             ++channel_state->total_graphics_storage_buffers;
@@ -1938,6 +1946,11 @@ bool BufferCache<P>::BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, 
     if (indirect_offset != ~0U) {
         TraceTablePointer(false, stage, ssbo_index, cbuf_index, cbuf_offset, indirect_offset, holder,
                           channel_state->storage_buffers[stage][ssbo_index]);
+    }
+    if (NullBindingTrace() && stage == 0 && ssbo_index == 0) {
+        const Binding& bound = channel_state->storage_buffers[stage][ssbo_index];
+        LOG_INFO(HW_GPU, "Storage bind result: stage={} index={} device_addr={:#x} size={:#x}",
+                 stage, ssbo_index, bound.device_addr, bound.size);
     }
     return (channel_state->storage_buffers[stage][ssbo_index].buffer_id != NULL_BUFFER_ID);
 }
