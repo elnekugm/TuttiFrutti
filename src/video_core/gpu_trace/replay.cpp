@@ -40,6 +40,12 @@
 #include "video_core/renderer_base.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
 
+// X11/X.h (pulled in by a system header on Linux) defines `Success` as 0, which collides with
+// Core::SystemResultStatus::Success below.
+#ifdef Success
+#undef Success
+#endif
+
 namespace VideoCommon::GpuTrace {
 namespace {
 using Clock = std::chrono::steady_clock;
