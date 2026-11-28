@@ -1918,6 +1918,14 @@ bool BufferCache<P>::BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, 
         holder = gpu_memory->Read<u64>(ssbo_addr);
         if (holder == 0) {
             channel_state->storage_buffers[stage][ssbo_index] = NULL_BINDING;
+            if (NullBindingTrace()) {
+                LOG_INFO(HW_GPU,
+                         "Null storage binding: stage={} index={} cbuffer={} offset={:#x} "
+                         "cbuf_enabled={} cbuf_address={:#x} table_entry={:#x} indirect={:#x}",
+                         stage, ssbo_index, cbuf_index, cbuf_offset,
+                         cbufs.const_buffers[cbuf_index].enabled,
+                         cbufs.const_buffers[cbuf_index].address, ssbo_addr, indirect_offset);
+            }
             return false;
         }
         ssbo_addr = holder + indirect_offset;
@@ -4446,6 +4454,12 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
     const GPUVAddr gpu_addr = gpu_memory->Read<u64>(ssbo_addr);
 
     if (gpu_addr == 0) {
+        if (NullBindingTrace()) {
+            LOG_INFO(HW_GPU,
+                     "Null storage binding: cbuffer={} pointer word at {:#x} is 0 (native={} "
+                     "table={} compute={} written={})",
+                     cbuf_index, ssbo_addr, native_pointer, table_pointer, compute, is_written);
+        }
         return NULL_BINDING;
     }
 
@@ -4582,6 +4596,13 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
         const std::optional<DAddr> aligned_device_addr =
             gpu_memory->GpuToCpuAddress(aligned_gpu_addr);
         if (!aligned_device_addr || size == 0) {
+            if (NullBindingTrace()) {
+                LOG_INFO(HW_GPU,
+                         "Null storage binding: cbuffer={} pointer={:#x} size={:#x} "
+                         "mapped={} (native={} table={} compute={} written={})",
+                         cbuf_index, gpu_addr, size, aligned_device_addr.has_value(),
+                         native_pointer, table_pointer, compute, is_written);
+            }
             LOG_DEBUG(HW_GPU, "Failed to find storage buffer for cbuf index {}", cbuf_index);
             return NULL_BINDING;
         }

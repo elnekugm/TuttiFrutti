@@ -122,6 +122,14 @@ static constexpr Binding NULL_BINDING{
     .buffer_id = NULL_BUFFER_ID,
 };
 
+/// EDEN_NX2_NULL_BINDING_TRACE=1: log each storage binding that comes out null, with the constant
+/// buffer and offset its pointer was read from. A shader reading an unbound pool computes on
+/// zeroes; Kirby Air Riders' sky wedge is one such frame.
+[[nodiscard]] inline bool NullBindingTrace() {
+    static const bool enabled = std::getenv("EDEN_NX2_NULL_BINDING_TRACE") != nullptr;
+    return enabled;
+}
+
 template <typename Buffer>
 struct HostBindings {
     boost::container::static_vector<Buffer*, NUM_VERTEX_BUFFERS> buffers;
