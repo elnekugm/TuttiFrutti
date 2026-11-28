@@ -846,6 +846,15 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     }
 
     // VK_EXT_descriptor_buffer requires VK_KHR_buffer_device_address
+    // EDEN_NX2_DESCRIPTOR_BUFFER=0: descriptor sets instead of descriptor buffers. A capture made
+    // with the descriptor-buffer path allocates memory at opaque capture addresses, which RenderDoc
+    // cannot replay (VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS).
+    if (const char* const dd = std::getenv("EDEN_NX2_DESCRIPTOR_BUFFER");
+        dd != nullptr && *dd == '0' && extensions.descriptor_buffer) {
+        LOG_INFO(Render_Vulkan, "Descriptor buffers disabled by EDEN_NX2_DESCRIPTOR_BUFFER=0");
+        RemoveExtensionFeature(extensions.descriptor_buffer, features.descriptor_buffer,
+                               VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME);
+    }
     if (extensions.descriptor_buffer && !features.buffer_device_address.bufferDeviceAddress) {
         LOG_WARNING(Render_Vulkan, "Descriptor buffer needs buffer device address, disabling.");
         RemoveExtensionFeature(extensions.descriptor_buffer, features.descriptor_buffer,

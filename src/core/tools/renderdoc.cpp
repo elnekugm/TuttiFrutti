@@ -18,6 +18,18 @@
 namespace Tools {
 
 RenderdocAPI::RenderdocAPI() {
+    Load();
+}
+
+bool RenderdocAPI::Available() const {
+    const_cast<RenderdocAPI*>(this)->Load();
+    return rdoc_api != nullptr;
+}
+
+void RenderdocAPI::Load() {
+    if (rdoc_api) {
+        return;
+    }
 #ifdef WIN32
     if (HMODULE mod = GetModuleHandleA("renderdoc.dll")) {
         void* proc = reinterpret_cast<void*>(GetProcAddress(mod, "RENDERDOC_GetAPI"));
@@ -51,13 +63,27 @@ void RenderdocAPI::ToggleCapture() {
         return;
     }
 
-    auto* api = static_cast<RENDERDOC_API_1_6_0*>(rdoc_api);
     if (!is_capturing) {
-        api->StartFrameCapture(NULL, NULL);
+        BeginCapture();
     } else {
-        api->EndFrameCapture(NULL, NULL);
+        EndCapture();
     }
-    is_capturing = !is_capturing;
+}
+
+void RenderdocAPI::BeginCapture() {
+    if (!rdoc_api || is_capturing) [[unlikely]] {
+        return;
+    }
+    static_cast<RENDERDOC_API_1_6_0*>(rdoc_api)->StartFrameCapture(NULL, NULL);
+    is_capturing = true;
+}
+
+void RenderdocAPI::EndCapture() {
+    if (!rdoc_api || !is_capturing) [[unlikely]] {
+        return;
+    }
+    static_cast<RENDERDOC_API_1_6_0*>(rdoc_api)->EndFrameCapture(NULL, NULL);
+    is_capturing = false;
 }
 
 } // namespace Tools

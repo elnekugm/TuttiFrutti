@@ -3548,6 +3548,15 @@ void RasterizerVulkan::TraceRenderState(bool is_indexed, const char* outcome,
     }
     if (const char* const want = std::getenv("EDEN_NX2_VERTEX_DUMP");
         want != nullptr && fmt::format("{:x}", shaders[1]) == want) {
+        for (size_t attr = 0; attr < regs.vertex_attrib_format.size(); ++attr) {
+            const auto& format = regs.vertex_attrib_format[attr];
+            if (format.buffer.Value() < regs.vertex_streams.size()) {
+                LOG_INFO(Render_Vulkan, "Vertex attrib {}: buffer={} offset={} type={} size={}",
+                         attr, format.buffer.Value(), format.offset.Value(),
+                         static_cast<u32>(format.type.Value()),
+                         static_cast<u32>(format.size.Value()));
+            }
+        }
         // EDEN_NX2_VERTEX_DUMP=<vertex shader address, hex>: the enabled vertex streams of the
         // draws that use it, as raw words, with the float32 NaNs among them counted.
         const u32 vertices{is_indexed ? draw.index_buffer.count : draw.vertex_buffer.count};

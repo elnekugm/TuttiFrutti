@@ -299,6 +299,54 @@ draw and has stepped edges at mip resolution. Its size varies from run to run wh
 frames that show it stay the same (15, 18, 22, 23, 25-28 in `trace-1795827473`), so frame
 dumps of two runs are not directly comparable pixel for pixel.
 
+### The NaN chain, measured with RenderDoc
+
+A RenderDoc capture of the replay frame (see below) gives the fragments' inputs and the blend:
+
+- The effect's instanced draws read an attribute declared `R32_FLOAT` from vertex stream 2,
+  and that stream holds `0xFFFFFFFF` for every vertex — a NaN. The guest's own
+  `vertex_attrib_format` asks for `R32_FLOAT` there (`type=7 size=0x12`), so the emulator
+  decodes the format correctly; the data itself is a NaN.
+- The vertex shader's outputs carry that NaN: 720 of 756 vertices of a 20-instance draw,
+  and the position's `w` spans about ±3.5e10 (a unit billboard behind the camera should be
+  around -1.2e3). The clean frame has the same degenerate output, so the geometry is broken
+  in both; the wedge appears when one of those nonsense triangles happens to cover the sky.
+- At a wedged pixel the fragment shader's inputs include `in_attr0 = (-7.9e8, -9.07e9, ...)`
+  and `in_attr6 = (1, NaN, 1, 0)`. The draw blends `src*srcAlpha + dst*(1-srcAlpha)` with
+  the shader's alpha 0, and RenderDoc reads the destination as finite (5.56, 8.63, 2.0) and
+  the result as NaN: `Inf * 0`. The Infinity comes from the absolute-log/exp tone map over
+  those huge attributes.
+
+So the chain is: NaN vertex attribute -> degenerate position and attributes -> tone map
+Infinity -> `Inf * 0` in the blend -> NaN in the light target -> bloom spreads it -> black
+wedge. Nothing in the emulator invents the NaN: `0x1180a00340` holds `0xFFFFFFFF` in the
+recorded guest memory itself, and no emulator path fills guest memory with `0xFF`.
+
+### Capturing a replay frame with RenderDoc
+
+`EDEN_NX2_RENDERDOC_FRAME=<present index>` brackets that frame with `StartFrameCapture` /
+`EndFrameCapture` (`Tools::RenderdocAPI` now looks the DLL up lazily, because the Vulkan
+layer loads it after the API object is built). Run the CLI with the layer enabled, no
+injection needed:
+
+```sh
+VK_LAYER_PATH=<RenderDoc> VK_INSTANCE_LAYERS=VK_LAYER_RENDERDOC_Capture \
+ENABLE_VULKAN_RENDERDOC_CAPTURE=1 EDEN_NX2_RENDERDOC_FRAME=15 \
+TuttiFrutti-cli.exe --replay <trace> --out <dir> --frames 17
+```
+
+`EDEN_NX2_DESCRIPTOR_BUFFER=0` switches the device to descriptor sets. The descriptor-buffer
+path allocates at opaque capture addresses, which RenderDoc cannot replay
+(`VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS`), so a capture meant to be opened in RenderDoc
+needs the switch — but that path binds no storage buffer to the vertex stage (RenderDoc
+reports 0 read-only resources for every effect draw while the SPIR-V declares `ssbo0`-`ssbo7`),
+so its shader output is not representative of a normal run.
+
+RenderDoc's Python API is only available through `qrenderdoc --python <script>` (Python 3.8
+inside the package): `OpenCaptureFile`, `OpenCapture`, `SetFrameEvent`, `PixelHistory`,
+`DebugPixel`/`DebugVertex`, `GetPostVSData` and `GetBufferData` are enough to follow this
+chain without the GUI.
+
 ### The null sampled image is now cleared to zero
 
 Devices without `VK_EXT_robustness2` (this NVIDIA one, so `HasNullDescriptor()` is false)

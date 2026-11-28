@@ -25,6 +25,7 @@
 #include "core/frontend/graphics_context.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/service/nvdrv/devices/nx2_stub_device.h"
+#include "core/tools/renderdoc.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/framebuffer_config.h"
 #include "video_core/gpu.h"
@@ -598,6 +599,20 @@ bool Replayer::Present(const Record& record, std::string& error) {
     });
     last_frame = now;
     ++presents;
+    // EDEN_NX2_RENDERDOC_FRAME=<present index>: bracket that one replay frame with RenderDoc, for a
+    // headless run that has no hotkey. The run must be launched through renderdoccmd, which loads
+    // renderdoc.dll into this process.
+    if (const char* const want = std::getenv("EDEN_NX2_RENDERDOC_FRAME")) {
+        const u64 target = std::strtoull(want, nullptr, 10);
+        if (presents == target) {
+            LOG_INFO(HW_GPU, "RenderDoc: capturing frame {} (api {})", presents - 1,
+                     system.GetRenderdocAPI().Available());
+            system.GetRenderdocAPI().BeginCapture();
+        } else if (presents == target + 1) {
+            system.GetRenderdocAPI().EndCapture();
+            LOG_INFO(HW_GPU, "RenderDoc: frame {} captured", presents - 1);
+        }
+    }
     if (options.max_frames != 0 && presents >= options.max_frames) {
         stop = true;
     }
