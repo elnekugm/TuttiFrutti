@@ -303,7 +303,8 @@ void FrameDump::Arm(VideoCore::Nx2Debug::CaptureRequest request) {
     }
 }
 
-std::optional<FrameDump::Target> FrameDump::MakeTarget(ImageView& view, u32 slot) const {
+std::optional<FrameDump::Target> FrameDump::MakeTarget(ImageView& view, u32 slot,
+                                                      bool allow_blocked) const {
     using namespace VideoCore::Surface;
     const Image* const image = view.BackingImage();
     if (!image) {
@@ -313,9 +314,16 @@ std::optional<FrameDump::Target> FrameDump::MakeTarget(ImageView& view, u32 slot
     const SurfaceType type = GetFormatType(info.format);
     if (info.type == VideoCommon::ImageType::Buffer ||
         (type != SurfaceType::ColorTexture && type != SurfaceType::Depth &&
-         type != SurfaceType::DepthStencil) ||
-        DefaultBlockWidth(info.format) != 1 || DefaultBlockHeight(info.format) != 1) {
+         type != SurfaceType::DepthStencil)) {
         return std::nullopt;
+    }
+    // Blocked (ASTC/BCn) textures are only dumped as raw bytes, when raws are being written: the
+    // per-texel preview and stats below need an uncompressed layout. Without this a sampler's
+    // compressed texture — the one input a wrong-image report cannot otherwise show — is invisible.
+    if (DefaultBlockWidth(info.format) != 1 || DefaultBlockHeight(info.format) != 1) {
+        if (!allow_blocked || !write_raw) {
+            return std::nullopt;
+        }
     }
     DepthEncoding depth_encoding = DepthEncoding::None;
     if (type != SurfaceType::ColorTexture) {
@@ -369,6 +377,15 @@ u32 FrameDump::TexelBytes(const Target& target) {
     default:
         return 4;
     }
+}
+
+size_t FrameDump::ByteSize(const Target& target) {
+    using namespace VideoCore::Surface;
+    const u32 block_width = DefaultBlockWidth(target.format);
+    const u32 block_height = DefaultBlockHeight(target.format);
+    const size_t blocks_x = (size_t{target.width} + block_width - 1) / block_width;
+    const size_t blocks_y = (size_t{target.height} + block_height - 1) / block_height;
+    return blocks_x * blocks_y * target.depth * TexelBytes(target);
 }
 
 int FrameDump::Decode(const Target& target, const u8* pixel, std::array<float, 4>& out) {
@@ -433,7 +450,7 @@ bool FrameDump::RecordSampled(const Sampled& texture, u32 index, std::string nam
                      static_cast<u32>(info.type), image.gpu_addr, reason)});
         return false;
     };
-    const auto target = MakeTarget(*texture.view, index);
+    const auto target = MakeTarget(*texture.view, index, true);
     if (!target) {
         return skip("format");
     }
@@ -441,8 +458,7 @@ bool FrameDump::RecordSampled(const Sampled& texture, u32 index, std::string nam
     // pass targets after them still fit. Mario Kart World's first compute dispatches sample four
     // terrain textures of 896 MiB together, which filled a bug bundle's 1 GiB before any view was
     // drawn.
-    const size_t size =
-        size_t{target->width} * target->height * target->depth * TexelBytes(*target);
+    const size_t size = ByteSize(*target);
     if (size > size_cap / 16 || sampled_bytes + size > size_cap / 2) {
         return skip("size");
     }
@@ -450,6 +466,14 @@ bool FrameDump::RecordSampled(const Sampled& texture, u32 index, std::string nam
         return false;
     }
     sampled_bytes += size;
+    return true;
+}
+
+bool FrameDump::RecordGuestBytes(std::span<const u8> bytes, std::string tags) {
+    if (bytes.empty()) {
+        return false;
+    }
+    Enqueue({.tags = std::move(tags), .data = {bytes.begin(), bytes.end()}, .raw = true});
     return true;
 }
 
@@ -604,7 +628,7 @@ bool FrameDump::Record(const Target& target, std::string name, std::string tags)
         Enqueue({.tags = fmt::format(R"({{"name":"{}",{},"skipped":"msaa"}})", name, tags)});
         return false;
     }
-    const size_t size = size_t{target.width} * target.height * target.depth * TexelBytes(target);
+    const size_t size = ByteSize(target);
     if (recorded_bytes + size > size_cap) {
         truncated = true;
         return false;
@@ -718,8 +742,7 @@ void FrameDump::Drain() {
         readback.buffer.Invalidate();
         const Target& target = readback.target;
         const auto mapped = readback.buffer.Mapped().first(
-            readback.raw ? readback.bytes
-                         : size_t{target.width} * target.height * target.depth * TexelBytes(target));
+            readback.raw ? readback.bytes : ByteSize(target));
         Enqueue({.target = target,
                  .name = std::move(readback.name),
                  .tags = std::move(readback.tags),

@@ -1452,6 +1452,34 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
                                    &texture_cache.GetSampler(image.sampler)});
             }
             recorded = frame_dump.NoteSampled(sampled);
+            // A blocked (ASTC/BCn) sampled texture gets no preview, so also keep its guest bytes:
+            // they are the only record of what the emulator uploaded for that image.
+            for (const FrameDump::Sampled& texture : sampled) {
+                const auto* const backing = texture.view->BackingImage();
+                if (!backing) {
+                    continue;
+                }
+                const auto& info = backing->info;
+                const u32 block_width = VideoCore::Surface::DefaultBlockWidth(info.format);
+                const u32 block_height = VideoCore::Surface::DefaultBlockHeight(info.format);
+                if (block_width == 1 && block_height == 1) {
+                    continue;
+                }
+                const size_t size =
+                    size_t{VideoCore::Surface::BytesPerBlock(info.format)} *
+                    ((info.size.width + block_width - 1) / block_width) *
+                    ((info.size.height + block_height - 1) / block_height);
+                if (size == 0 || size > (4U << 20)) {
+                    continue;
+                }
+                std::vector<u8> guest(size);
+                device_memory.ReadBlockUnsafe(backing->gpu_addr, guest.data(), size);
+                recorded |= frame_dump.RecordGuestBytes(
+                    guest, fmt::format(
+                               R"("kind":"sampledguest","tic":{},"format":"{}","width":{},"height":{},"gpu_addr":"{:#x}")",
+                               texture.tic, info.format, info.size.width, info.size.height,
+                               backing->gpu_addr));
+            }
         }
         if (frame_dump.CapturingBuffers()) {
             recorded |= FrameDumpBuffers(false, pipeline->ShaderHashes());

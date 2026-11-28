@@ -164,6 +164,9 @@ public:
     /// to run not yet seen for their shader. Returns true when copies were recorded.
     bool NoteBuffers(bool compute, std::span<const u64> shader_hashes,
                      std::span<BoundBuffer> buffers);
+    /// Records guest bytes as a raw dump under their own hash (used for the guest layout of a
+    /// sampled texture the preview cannot decode).
+    bool RecordGuestBytes(std::span<const u8> bytes, std::string tags);
     /// Records the group counts of the dispatch about to run.
     void NoteLaunch(u64 shader_hash, const std::array<u32, 3>& grid,
                     const std::array<u32, 3>& block, std::optional<GPUVAddr> indirect,
@@ -229,8 +232,9 @@ private:
         bool truncated{};
     };
 
-    std::optional<Target> MakeTarget(ImageView& view, u32 slot) const;
+    std::optional<Target> MakeTarget(ImageView& view, u32 slot, bool allow_blocked = false) const;
     static u32 TexelBytes(const Target& target);
+    static size_t ByteSize(const Target& target);
     static int Decode(const Target& target, const u8* pixel, std::array<float, 4>& out);
     bool Record(const Target& target, std::string name, std::string tags);
     bool RecordSampled(const Sampled& texture, u32 index, std::string name, std::string tags);
