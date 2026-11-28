@@ -3537,6 +3537,36 @@ void RasterizerVulkan::TraceRenderState(bool is_indexed, const char* outcome,
                       buffer_cache_runtime.IsVertexRepacked(static_cast<u32>(binding)));
         }
     }
+    if (const char* const want = std::getenv("EDEN_NX2_VERTEX_DUMP");
+        want != nullptr && fmt::format("{:x}", shaders[1]) == want) {
+        // EDEN_NX2_VERTEX_DUMP=<vertex shader address, hex>: the enabled vertex streams of the
+        // draws that use it, as raw words, with the float32 NaNs among them counted.
+        const u32 vertices{is_indexed ? draw.index_buffer.count : draw.vertex_buffer.count};
+        for (size_t binding = 0; binding < regs.vertex_streams.size(); ++binding) {
+            const auto& stream = regs.vertex_streams[binding];
+            if (!stream.IsEnabled()) {
+                continue;
+            }
+            const u32 stride{stream.stride.Value()};
+            const u64 size{std::min<u64>(u64{vertices} * stride + 256, 2048)};
+            std::vector<u32> words(size / sizeof(u32));
+            if (!gpu_memory->IsFullyMappedRange(stream.Address(), size)) {
+                LOG_INFO(Render_Vulkan, "Vertex dump binding={} unmapped at {:#x} size={}", binding,
+                         stream.Address(), size);
+                continue;
+            }
+            gpu_memory->ReadBlock(stream.Address(), words.data(), size);
+            u32 nan{};
+            std::string text;
+            for (const u32 word : words) {
+                nan += (word & 0x7F800000) == 0x7F800000 && (word & 0x007FFFFF) != 0;
+                text += fmt::format("{:08x}", word);
+            }
+            LOG_INFO(Render_Vulkan,
+                     "Vertex dump binding={} address={:#x} stride={} count={} nan={} data={}",
+                     binding, stream.Address(), stride, vertices, nan, text);
+        }
+    }
     if (is_indexed) {
         LOG_DEBUG(Render_Vulkan, "Render trace index: address={:#x} limit={:#x} format={} first={}",
                   regs.index_buffer.StartAddress(), regs.index_buffer.EndAddress(),

@@ -242,6 +242,47 @@ DMA reads drain the split first, which is what `EDEN_NX2_MACRO_DMA_DRAIN=1` does
 read. Nothing changes for a macro that runs: the reads still wait only for the queued work
 that can write the words they read.
 
+## The sky wedge is a NaN from one effect draw (open)
+
+In races, some frames show a huge black wedge in the sky (rarely magenta) that blinks
+frame to frame. Trace `trace-1795827473.lxtrace` (recorded on the owner's PC) replays it
+on an NVIDIA RTX 5060 too, so it is not a driver difference. The frame dump of frame 15
+puts it in the 1920x1080 light target `0x81079a0000`: the pass before the effect draws
+(pass 16, draws 67-88) reads back `nan:0`, and after them (pass 19, draws 101-124) it
+reads back `nan:250282`. The NaN is what the target stores, and the present turns it
+black; the dump's PNG shows it as magenta.
+
+Bisected with `EDEN_NX2_REJECT_HASH` on the replay (black-pixel count over the wedge):
+rejecting either stage of draws 107-108 (`1608b9179183e4fd` vertex,
+`a93e8dde125713f5` fragment, pipeline `9e35795fa4ccbeea`) removes it; rejecting anything
+else in the pass does not. Both stages are needed, so the draw itself produces the NaN.
+
+It is data-dependent: the same pipeline, at the same vertex-stream addresses, draws the
+same 96-vertex instanced mesh in the clean frame 16 without a NaN. Ruled out so far:
+
+- the constant buffers (uniform 0 carries the same single NaN at offset 0x510 in both a
+  clean sibling and this draw; 3, 4, 5 and 6 are identical across the group);
+- the vertex streams (binding 0 is the unit mesh, binding 1 half-float UVs, binding 2 is
+  `0xFFFFFFFF` in both frames, a packed attribute, not float NaN);
+- the constant-buffer handle tables (`EDEN_NX2_CBUF_TABLES=0` and
+  `EDEN_NX2_HANDLE_TABLES=0` leave the artifact);
+- a 4 MiB null buffer (`BufferCacheRuntime::NullBufferSize`) for the null storage
+  bindings this draw reads (`ssbo0`-`ssbo7` in the vertex shader, `ssbo0` in the
+  fragment shader): unchanged;
+- pending CPU writes into GPU-written memory (`EDEN_NX2_PENDING_WRITE_TRACE`): none.
+
+Left to check: the fragment shader's `fs_tex2_168` sample and the null storage buffers
+themselves. The sampled-texture frame dump (`EDEN_NX2_FRAME_DUMP_SAMPLED`) cannot reach
+this draw: it loses the device at the first compute dispatch image it reads back
+(`invalid write at 0x37b400000`, 4 KiB at a 2 MiB boundary), the same shape as the
+game's own device loss.
+
+Diagnostics added for this round: `EDEN_NX2_RENDER_TRACE_FRAME=<n>` picks the one frame
+the render trace describes (instead of every 600th), `EDEN_NX2_FRAME_DUMP_SHADERS=1` and
+`EDEN_NX2_FRAME_DUMP_BUFFERS=1` write the frame's SPIR-V, pipeline keys, native programs
+and bound buffers, and `EDEN_NX2_VERTEX_DUMP=<vertex shader hash>` prints the enabled
+vertex streams of that shader's draws.
+
 ## Not ported
 
 Satsuma also reads Kirby's shaders for its warm-up from the game's asset catalog

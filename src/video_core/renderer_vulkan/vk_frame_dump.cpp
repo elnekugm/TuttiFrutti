@@ -250,7 +250,9 @@ FrameDump::FrameDump(const Device& device_, MemoryAllocator& memory_allocator_,
     const std::string_view value = at ? at : "60";
     // "file" captures once <dir>/capture.now exists, so a frame can be picked while playing.
     schedule.Configure(value, directory / "capture.now",
-                       sampled_value && *sampled_value != '\0' && *sampled_value != '0');
+                       sampled_value && *sampled_value != '\0' && *sampled_value != '0',
+                       std::getenv("EDEN_NX2_FRAME_DUMP_SHADERS") != nullptr,
+                       std::getenv("EDEN_NX2_FRAME_DUMP_BUFFERS") != nullptr);
     LOG_INFO(Render_Vulkan, "Frame dump armed: dir={} at={}",
              Common::FS::PathToUTF8String(directory), value);
 }
@@ -1065,10 +1067,11 @@ void FrameDump::TickFrame() {
 }
 
 void FrameDumpSchedule::Configure(std::string_view at, std::filesystem::path trigger_file_,
-                                  bool sampled_) {
+                                  bool sampled_, bool shaders_, bool buffers_) {
     enabled = true;
     sampled = sampled_;
-    buffers = sampled_;
+    buffers = sampled_ || buffers_;
+    shaders = shaders_;
     if (at == "file") {
         trigger_file = std::move(trigger_file_);
     } else if (at.ends_with('f')) {

@@ -42,8 +42,11 @@ public:
 
     /// EDEN_NX2_FRAME_DUMP_AT: seconds after boot ("45"), a frame number ("2700f"), or "file" to
     /// capture once `trigger_file` exists. EDEN_NX2_FRAME_DUMP_SAMPLED reads back both the
-    /// sampled textures and the bound buffers.
-    void Configure(std::string_view at, std::filesystem::path trigger_file, bool sampled);
+    /// sampled textures and the bound buffers; EDEN_NX2_FRAME_DUMP_BUFFERS reads back the bound
+    /// buffers alone (the texture read-back can lose the device); EDEN_NX2_FRAME_DUMP_SHADERS
+    /// writes the frame's SPIR-V, pipeline keys and native programs.
+    void Configure(std::string_view at, std::filesystem::path trigger_file, bool sampled,
+                   bool shaders_ = false, bool buffers_ = false);
     /// Captures the next frame for the debug server, which is told `id`. False while a capture
     /// runs.
     bool Arm(bool sampled, bool buffers, u64 id, bool shaders = false);

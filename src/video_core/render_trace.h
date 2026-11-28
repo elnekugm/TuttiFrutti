@@ -14,7 +14,13 @@ inline bool Enabled() {
 }
 
 inline bool SampleFrame(u64 frame) {
-    return Enabled() && frame % 600 == 0;
+    if (!Enabled()) {
+        return false;
+    }
+    if (const char* const sampled = std::getenv("EDEN_NX2_RENDER_TRACE_FRAME")) {
+        return frame == std::strtoull(sampled, nullptr, 10);
+    }
+    return frame % 600 == 0;
 }
 
 } // namespace VideoCommon::RenderTrace
