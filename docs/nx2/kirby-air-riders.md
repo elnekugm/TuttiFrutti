@@ -321,12 +321,22 @@ has content the guest bytes did not show, so the decode is doing something.
 What is left is the arithmetic on finite values. The tone map is
 `Exp2(Log2(|c|) * (1 / divisor))`; `divisor` is a product of two values the shader derives
 (not a constant), so a zero divisor gives Infinity, and `Log2(|c|)` is exactly zero for a
-channel of 1.0 (common in a UNORM sample), which makes `0 * Inf = NaN`. Nvidia's `FMUL`
-with the `FMZ` flag returns 0 for `0 * Inf`, and the game's shader unpacks half floats
-(`UnpackHalf2x16`), which this emulator demotes to f32 on Ampere and newer (its own log
-says `Ampere and newer have broken float16 math`). Whether the demotion loses `FMZ` -
-`0 * Inf` becoming NaN where the console gives 0 - is the next thing to check, together
-with issue Lichii#745 (`FFMA.FMZ.SAT` / `HFMA2.FMZ.SAT` dropping the addend).
+channel of 1.0 (common in a UNORM sample), which makes `0 * Inf = NaN`.
+
+`FMZ` and `f16` are ruled out: the captured fragment SPIR-V declares only `float` (no
+`OpTypeFloat 16`, no `OpFConvert`), carries no `OpSelect` at all (so no flush-multiply-zero
+select was lost), and its capabilities are `Shader`, `ImageQuery`, `SampledBuffer`,
+`ImageGatherExtended` and `SignedZeroInfNanPreserve`. Plain IEEE f32 gives the same `NaN`
+on the console.
+
+That leaves a contradiction worth following: with the same constants, the same vertex
+buffers, the same null storage bindings (all zero) and one UNORM texture that cannot hold a
+NaN, every input to the draw is deterministic, yet the result differs between frame 15 and
+frame 16. So the difference is not in the shader's inputs but in what the draw is blended
+into: frame 15's sky target is blown out (values 8-11 vs 0.5 in a clean frame), and a blend
+of zero/near-zero source against it can produce `0 * Inf`. Frame 16 also has the same draw
+every frame, so the frames that show the wedge are the ones where the depth test lets it
+through over that sky.
 
 Diagnostics added for this round: `EDEN_NX2_RENDER_TRACE_FRAME=<n>` picks the one frame
 the render trace describes (instead of every 600th), `EDEN_NX2_FRAME_DUMP_SHADERS=1` and
